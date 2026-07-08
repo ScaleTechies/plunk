@@ -124,24 +124,29 @@ services:
       JWT_SECRET: ${JWT_SECRET}
 
       # Nginx configuration
-      NGINX_PORT: ${NGINX_PORT:-80}
+      NGINX_PORT: 80
 
-      # Domain configuration (subdomain-based routing)
-      # Each service gets its own subdomain
-      API_DOMAIN: ${API_DOMAIN:-api.localhost}
-      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-app.localhost}
-      LANDING_DOMAIN: ${LANDING_DOMAIN:-www.localhost}
-      WIKI_DOMAIN: ${WIKI_DOMAIN:-docs.localhost}
+      # Coolify public mappings. Coolify generates these URLs/FQDNs and routes
+      # each hostname to this service on container port 80.
+      SERVICE_URL_API_80: ${SERVICE_URL_API_80}
+      SERVICE_URL_DASHBOARD_80: ${SERVICE_URL_DASHBOARD_80}
+      SERVICE_URL_LANDING_80: ${SERVICE_URL_LANDING_80}
+      SERVICE_URL_WIKI_80: ${SERVICE_URL_WIKI_80}
+      SERVICE_FQDN_API: ${SERVICE_FQDN_API}
+      SERVICE_FQDN_DASHBOARD: ${SERVICE_FQDN_DASHBOARD}
+      SERVICE_FQDN_LANDING: ${SERVICE_FQDN_LANDING}
+      SERVICE_FQDN_WIKI: ${SERVICE_FQDN_WIKI}
 
-      # Protocol configuration (set to true for HTTPS in production)
-      USE_HTTPS: ${USE_HTTPS:-false}
-
-      # Application URLs (auto-configured by setup-nginx.sh from domains above)
-      # You can override these if needed
-      API_URI: ${API_URI:-}
-      DASHBOARD_URI: ${DASHBOARD_URI:-}
-      LANDING_URI: ${LANDING_URI:-}
-      WIKI_URI: ${WIKI_URI:-}
+      # Plunk's internal nginx/app config consumes bare domains and full URLs.
+      API_DOMAIN: ${SERVICE_FQDN_API}
+      DASHBOARD_DOMAIN: ${SERVICE_FQDN_DASHBOARD}
+      LANDING_DOMAIN: ${SERVICE_FQDN_LANDING}
+      WIKI_DOMAIN: ${SERVICE_FQDN_WIKI}
+      USE_HTTPS: "true"
+      API_URI: ${SERVICE_URL_API_80}
+      DASHBOARD_URI: ${SERVICE_URL_DASHBOARD_80}
+      LANDING_URI: ${SERVICE_URL_LANDING_80}
+      WIKI_URI: ${SERVICE_URL_WIKI_80}
 
       # ZeptoMail fallback (project-level credentials are preferred)
       ZEPTOMAIL_SEND_TOKEN: ${ZEPTOMAIL_SEND_TOKEN:-}
