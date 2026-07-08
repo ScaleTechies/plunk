@@ -233,8 +233,8 @@ services:
         condition: service_healthy
 
     healthcheck:
-      # Check nginx is running and responding
-      test: [ "CMD", "curl", "-f", "http://localhost:80/" ]
+      # Check nginx can route to the API health endpoint.
+      test: [ "CMD", "curl", "-f", "http://localhost:80/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
