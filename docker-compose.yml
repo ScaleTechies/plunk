@@ -40,8 +40,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - plunk
 
   redis:
     image: redis:7-alpine
@@ -54,8 +52,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - plunk
 
   minio:
     image: minio/minio:latest
@@ -75,8 +71,6 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
-    networks:
-      - plunk
 
   ntfy:
     image: binwiederhier/ntfy:latest
@@ -96,8 +90,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    networks:
-      - plunk
 
   # ============================================
   # Plunk Application
@@ -132,10 +124,6 @@ services:
       SERVICE_URL_DASHBOARD: ${SERVICE_URL_DASHBOARD}
       SERVICE_URL_LANDING: ${SERVICE_URL_LANDING}
       SERVICE_URL_WIKI: ${SERVICE_URL_WIKI}
-      SERVICE_URL_API_80: ${SERVICE_URL_API_80}
-      SERVICE_URL_DASHBOARD_80: ${SERVICE_URL_DASHBOARD_80}
-      SERVICE_URL_LANDING_80: ${SERVICE_URL_LANDING_80}
-      SERVICE_URL_WIKI_80: ${SERVICE_URL_WIKI_80}
       USE_HTTPS: "true"
 
       # Public application URLs. These are consumed by the API and frontend
@@ -240,9 +228,6 @@ services:
       retries: 3
       start_period: 60s
 
-    networks:
-      - plunk
-
 volumes:
   postgres_data:
     driver: local
@@ -256,7 +241,3 @@ volumes:
     driver: local
   ntfy_etc:
     driver: local
-
-networks:
-  plunk:
-    driver: bridge
