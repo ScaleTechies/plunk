@@ -14,11 +14,52 @@ mkdir -p "${NGINX_CONF_D}"
 
 echo "🌐 Using subdomain-based routing"
 
+clean_url() {
+    printf '%s' "$1" | sed -E 's#^(https?://[^/:]+):(80|443)(/|$)#\1\3#'
+}
+
+url_host() {
+    clean_url "$1" | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##'
+}
+
+first_non_empty() {
+    for value in "$@"; do
+        if [ -n "$value" ]; then
+            printf '%s' "$value"
+            return
+        fi
+    done
+}
+
+# Prefer Coolify's clean SERVICE_URL_* values. SERVICE_URL_*_80 is still
+# accepted as a fallback because it is what creates the port-80 service mapping.
+COOLIFY_API_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_API" "$SERVICE_URL_API_80")")"
+COOLIFY_DASHBOARD_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_DASHBOARD" "$SERVICE_URL_DASHBOARD_80")")"
+COOLIFY_LANDING_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_LANDING" "$SERVICE_URL_LANDING_80")")"
+COOLIFY_WIKI_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_WIKI" "$SERVICE_URL_WIKI_80")")"
+
 # Set defaults if not provided
+export API_DOMAIN="${API_DOMAIN:-$(url_host "$COOLIFY_API_URI")}"
+export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-$(url_host "$COOLIFY_DASHBOARD_URI")}"
+export LANDING_DOMAIN="${LANDING_DOMAIN:-$(url_host "$COOLIFY_LANDING_URI")}"
+export WIKI_DOMAIN="${WIKI_DOMAIN:-$(url_host "$COOLIFY_WIKI_URI")}"
 export API_DOMAIN="${API_DOMAIN:-api.localhost}"
 export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-app.localhost}"
 export LANDING_DOMAIN="${LANDING_DOMAIN:-www.localhost}"
 export WIKI_DOMAIN="${WIKI_DOMAIN:-docs.localhost}"
+
+if [ -n "$COOLIFY_API_URI" ] && [ "$API_DOMAIN" = "api.localhost" ]; then
+    export API_DOMAIN="$(url_host "$COOLIFY_API_URI")"
+fi
+if [ -n "$COOLIFY_DASHBOARD_URI" ] && [ "$DASHBOARD_DOMAIN" = "app.localhost" ]; then
+    export DASHBOARD_DOMAIN="$(url_host "$COOLIFY_DASHBOARD_URI")"
+fi
+if [ -n "$COOLIFY_LANDING_URI" ] && [ "$LANDING_DOMAIN" = "www.localhost" ]; then
+    export LANDING_DOMAIN="$(url_host "$COOLIFY_LANDING_URI")"
+fi
+if [ -n "$COOLIFY_WIKI_URI" ] && [ "$WIKI_DOMAIN" = "docs.localhost" ]; then
+    export WIKI_DOMAIN="$(url_host "$COOLIFY_WIKI_URI")"
+fi
 export SMTP_DOMAIN="${SMTP_DOMAIN:-smtp.localhost}"
 export NGINX_PORT="${NGINX_PORT:-80}"
 export USE_HTTPS="${USE_HTTPS:-false}"
@@ -40,6 +81,10 @@ if [ -z "$API_DOMAIN" ] || [ -z "$DASHBOARD_DOMAIN" ] || [ -z "$LANDING_DOMAIN" 
 fi
 
 # Auto-configure API URIs based on domains and protocol
+export API_URI="${API_URI:-${COOLIFY_API_URI}}"
+export DASHBOARD_URI="${DASHBOARD_URI:-${COOLIFY_DASHBOARD_URI}}"
+export LANDING_URI="${LANDING_URI:-${COOLIFY_LANDING_URI}}"
+export WIKI_URI="${WIKI_URI:-${COOLIFY_WIKI_URI}}"
 export API_URI="${API_URI:-${PROTOCOL}://${API_DOMAIN}}"
 export DASHBOARD_URI="${DASHBOARD_URI:-${PROTOCOL}://${DASHBOARD_DOMAIN}}"
 export LANDING_URI="${LANDING_URI:-${PROTOCOL}://${LANDING_DOMAIN}}"
