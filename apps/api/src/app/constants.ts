@@ -40,23 +40,20 @@ export const S3_PUBLIC_URL = validateEnv('S3_PUBLIC_URL', '');
 export const S3_FORCE_PATH_STYLE = validateEnv('S3_FORCE_PATH_STYLE', 'true') === 'true';
 export const S3_ENABLED = S3_ACCESS_KEY_ID !== '' && S3_ACCESS_KEY_SECRET !== '';
 
-// AWS SES (required for email sending)
-export const AWS_SES_REGION = validateEnv('AWS_SES_REGION');
-export const AWS_SES_ACCESS_KEY_ID = validateEnv('AWS_SES_ACCESS_KEY_ID');
-export const AWS_SES_SECRET_ACCESS_KEY = validateEnv('AWS_SES_SECRET_ACCESS_KEY');
-
-// Custom MAIL FROM subdomain used to construct `<subdomain>.<your-domain>`
-// when a domain is added. Defaults to `plunk`. Override when `plunk.<your-domain>`
-// is already used for something else (e.g. a CDN), since the MAIL FROM hostname
-// needs MX + TXT records that can't coexist with a CNAME.
-export const MAIL_FROM_SUBDOMAIN = validateEnv('MAIL_FROM_SUBDOMAIN', '').trim() || 'plunk';
+// ZeptoMail (required for email sending)
+export const ZEPTOMAIL_SEND_TOKEN = validateEnv('ZEPTOMAIL_SEND_TOKEN');
+export const ZEPTOMAIL_API_URL = validateEnv('ZEPTOMAIL_API_URL', 'https://api.zeptomail.com/v1.1/email');
+export const ZEPTOMAIL_WEBHOOK_AUTH_KEY = validateEnv('ZEPTOMAIL_WEBHOOK_AUTH_KEY', '');
+export const ZEPTOMAIL_WEBHOOK_MAX_AGE_SECONDS = Number(validateEnv('ZEPTOMAIL_WEBHOOK_MAX_AGE_SECONDS', '300'));
 
 // Email Processing Rate Limit (optional override)
-// If not set, will automatically fetch from AWS SES account quota
-// Set this to override AWS quota (useful for setting lower limits or testing)
 export const EMAIL_RATE_LIMIT_PER_SECOND = process.env.EMAIL_RATE_LIMIT_PER_SECOND
   ? Number(process.env.EMAIL_RATE_LIMIT_PER_SECOND)
-  : undefined;
+  : 2;
+
+// Static daily limit used for worker quota reporting. ZeptoMail does not expose
+// an SES-style quota endpoint through the send-mail token.
+export const EMAIL_DAILY_LIMIT = Number(validateEnv('EMAIL_DAILY_LIMIT', '5000'));
 
 // Email Worker Concurrency (optional override)
 // If not set, concurrency is derived from the effective rate limit so a higher
@@ -66,11 +63,9 @@ export const EMAIL_WORKER_CONCURRENCY = process.env.EMAIL_WORKER_CONCURRENCY
   ? Number(process.env.EMAIL_WORKER_CONCURRENCY)
   : undefined;
 
-// Upper bound for auto-derived concurrency. Raise this if you have a large SES
-// quota AND have sized the Prisma connection pool accordingly.
 export const EMAIL_WORKER_MAX_CONCURRENCY = process.env.EMAIL_WORKER_MAX_CONCURRENCY
   ? Number(process.env.EMAIL_WORKER_MAX_CONCURRENCY)
-  : 50;
+  : 5;
 
 // Storage
 export const REDIS_URL = validateEnv('REDIS_URL');
@@ -97,13 +92,7 @@ export const STRIPE_PRICE_EMAIL_USAGE = validateEnv('STRIPE_PRICE_EMAIL_USAGE', 
 export const STRIPE_METER_EVENT_NAME = validateEnv('STRIPE_METER_EVENT_NAME', 'emails'); // Meter event name (API key in Stripe)
 
 // Email Tracking
-export const SES_CONFIGURATION_SET = validateEnv('SES_CONFIGURATION_SET', 'plunk-configuration-set');
-export const SES_CONFIGURATION_SET_NO_TRACKING = validateEnv(
-  'SES_CONFIGURATION_SET_NO_TRACKING',
-  'plunk-configuration-set-no-tracking',
-);
-// Check if no-tracking configuration set was explicitly provided (not using default)
-export const TRACKING_TOGGLE_ENABLED = process.env.SES_CONFIGURATION_SET_NO_TRACKING !== undefined;
+export const TRACKING_TOGGLE_ENABLED = true;
 
 // SMTP Server Configuration (optional)
 // SMTP server can run with or without a domain (runs without TLS in dev mode)
@@ -131,7 +120,7 @@ export const DISABLE_SIGNUPS = process.env.DISABLE_SIGNUPS === 'true';
 export const VERIFY_EMAIL_ON_SIGNUP = process.env.VERIFY_EMAIL_ON_SIGNUP === 'true';
 
 // Attachment Limits (optional)
-// Maximum total attachment size in MB (default: 10). AWS SES supports up to 40 MB.
+// Maximum total attachment size in MB (default: 10).
 export const MAX_ATTACHMENT_SIZE_MB = Number(validateEnv('MAX_ATTACHMENT_SIZE_MB', '10'));
 // Maximum number of attachments per email (default: 10)
 export const MAX_ATTACHMENTS_COUNT = Number(validateEnv('MAX_ATTACHMENTS_COUNT', '10'));

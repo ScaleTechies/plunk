@@ -25,7 +25,7 @@ import {
 
 /**
  * Security thresholds for bounce and complaint rates
- * These limits protect AWS SES reputation and prevent account suspension
+ * These limits protect sender reputation and prevent provider account suspension
  */
 const SECURITY_THRESHOLDS = {
   // Minimum emails required before enforcing rate-based limits (prevents false positives)

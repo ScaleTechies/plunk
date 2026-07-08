@@ -11,12 +11,12 @@ import * as SESService from '../../services/SESService.js';
 describe('Domain Verification and Ownership Tests', () => {
   const prisma = getPrismaClient();
 
-  // Mock SES service to avoid external AWS calls
+  // Mock provider compatibility calls to avoid external ZeptoMail calls
   beforeEach(() => {
-    vi.spyOn(SESService, 'verifyDomain').mockResolvedValue(['token1', 'token2', 'token3']);
+    vi.spyOn(SESService, 'verifyDomain').mockResolvedValue([]);
     vi.spyOn(SESService, 'getDomainVerificationAttributes').mockResolvedValue({
       status: 'Success',
-      tokens: ['token1', 'token2', 'token3'],
+      tokens: [],
     });
   });
 
@@ -155,37 +155,38 @@ describe('Domain Verification and Ownership Tests', () => {
   // DOMAIN VERIFICATION STATUS
   // ========================================
   describe('Domain Verification Status', () => {
-    it('should create unverified domain when first added', async () => {
+    it('should create verified domain when manually added after ZeptoMail verification', async () => {
       const {project} = await factories.createUserWithProject();
-      const domain = 'unverified-domain.com';
+      const domain = 'manually-verified-domain.com';
 
       const newDomain = await DomainService.addDomain(project.id, domain);
 
-      expect(newDomain.verified).toBe(false);
-      expect(newDomain.dkimTokens).toEqual(['token1', 'token2', 'token3']);
+      expect(newDomain.verified).toBe(true);
+      expect(newDomain.dkimTokens).toEqual([]);
     });
 
-    it('should prevent using unverified domain for sending emails', async () => {
+    it('should prevent using manually unverified domain for sending emails', async () => {
       const {project} = await factories.createUserWithProject();
       const domain = 'unverified-domain.com';
 
-      await DomainService.addDomain(project.id, domain);
+      await prisma.domain.create({
+        data: {
+          projectId: project.id,
+          domain,
+          verified: false,
+          dkimTokens: [],
+        },
+      });
 
       // Try to verify email domain
       await expect(DomainService.verifyEmailDomain(`sender@${domain}`, project.id)).rejects.toThrow(/not verified/i);
     });
 
-    it('should allow using verified domain for sending emails', async () => {
+    it('should allow using admin-added verified domain for sending emails', async () => {
       const {project} = await factories.createUserWithProject();
       const domain = 'verified-domain.com';
 
-      const newDomain = await DomainService.addDomain(project.id, domain);
-
-      // Manually mark as verified (simulating DNS verification)
-      await prisma.domain.update({
-        where: {id: newDomain.id},
-        data: {verified: true},
-      });
+      await DomainService.addDomain(project.id, domain);
 
       // Should not throw error
       const verifiedDomain = await DomainService.verifyEmailDomain(`sender@${domain}`, project.id);

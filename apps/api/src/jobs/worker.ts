@@ -1,6 +1,6 @@
 /**
  * Unified Queue Worker
- * Starts all queue processors (email, campaign, scheduled, workflow, import, segment-count, domain-verification)
+ * Starts all queue processors (email, campaign, scheduled, workflow, import, segment-count)
  *
  * This should be run as a separate process in production:
  * node dist/jobs/worker.js
@@ -12,7 +12,6 @@ import signale from 'signale';
 import {createApiRequestCleanupWorker} from './api-request-cleanup-processor.js';
 import {createBulkContactWorker} from './bulk-contact-processor.js';
 import {createCampaignWorker} from './campaign-processor.js';
-import {createDomainVerificationWorker} from './domain-verification-processor.js';
 import {createEmailWorker} from './email-processor.js';
 import {createImportWorker} from './import-processor.js';
 import {createMeterWorker} from './meter-processor.js';
@@ -60,11 +59,6 @@ async function startWorkers() {
     const segmentCountWorker = createSegmentCountWorker();
     workers.push({name: 'segment-count', worker: segmentCountWorker});
     signale.success('[WORKER] Segment count worker started');
-
-    // Start domain verification worker
-    const domainVerificationWorker = createDomainVerificationWorker();
-    workers.push({name: 'domain-verification', worker: domainVerificationWorker});
-    signale.success('[WORKER] Domain verification worker started');
 
     // Start API request cleanup worker
     const apiRequestCleanupWorker = createApiRequestCleanupWorker();

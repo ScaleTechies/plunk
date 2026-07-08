@@ -1,28 +1,12 @@
-import {SES} from '@aws-sdk/client-ses';
 import signale from 'signale';
 
 import {
-  AWS_SES_ACCESS_KEY_ID,
-  AWS_SES_REGION,
-  AWS_SES_SECRET_ACCESS_KEY,
   DASHBOARD_URI,
-  MAIL_FROM_SUBDOMAIN,
-  SES_CONFIGURATION_SET,
-  SES_CONFIGURATION_SET_NO_TRACKING,
-  TRACKING_TOGGLE_ENABLED,
+  EMAIL_DAILY_LIMIT,
+  EMAIL_RATE_LIMIT_PER_SECOND,
+  ZEPTOMAIL_API_URL,
+  ZEPTOMAIL_SEND_TOKEN,
 } from '../app/constants.js';
-
-/**
- * AWS SES Client
- */
-export const ses = new SES({
-  apiVersion: '2010-12-01',
-  region: AWS_SES_REGION,
-  credentials: {
-    accessKeyId: AWS_SES_ACCESS_KEY_ID,
-    secretAccessKey: AWS_SES_SECRET_ACCESS_KEY,
-  },
-});
 
 interface SendRawEmailParams {
   from: {
@@ -46,43 +30,73 @@ interface SendRawEmailParams {
       }[]
     | null;
   tracking?: boolean;
+  clientReference?: string;
 }
 
-/**
- * Break long lines to comply with email RFC standards
- */
-function breakLongLines(input: string, maxLineLength: number, isBase64 = false): string {
-  if (isBase64) {
-    // For base64 content, break at exact intervals without looking for spaces
-    const result = [];
-    for (let i = 0; i < input.length; i += maxLineLength) {
-      result.push(input.substring(i, i + maxLineLength));
-    }
-    return result.join('\n');
-  } else {
-    // For text content, break at spaces when possible
-    const lines = input.split('\n');
-    const result = [];
-    for (let line of lines) {
-      while (line.length > maxLineLength) {
-        let pos = maxLineLength;
-        while (pos > 0 && line[pos] !== ' ') {
-          pos--;
-        }
-        if (pos === 0) {
-          pos = maxLineLength;
-        }
-        result.push(line.substring(0, pos));
-        line = line.substring(pos).trim();
-      }
-      result.push(line);
-    }
-    return result.join('\n');
+type ZeptoMailResponse = {
+  request_id?: string;
+  data?: Array<{
+    request_id?: string;
+    additional_info?: {
+      request_id?: string;
+      email_reference?: string;
+    };
+  }>;
+  error?: {
+    message?: string;
+    request_id?: string;
+  };
+  message?: string;
+};
+
+function formatRecipient(recipient: string | {name?: string; email: string}) {
+  if (typeof recipient === 'string') {
+    return {
+      email_address: {
+        address: recipient,
+      },
+    };
   }
+
+  return {
+    email_address: {
+      address: recipient.email,
+      ...(recipient.name ? {name: recipient.name} : {}),
+    },
+  };
+}
+
+function getAuthorizationHeader() {
+  return ZEPTOMAIL_SEND_TOKEN.startsWith('Zoho-enczapikey ')
+    ? ZEPTOMAIL_SEND_TOKEN
+    : `Zoho-enczapikey ${ZEPTOMAIL_SEND_TOKEN}`;
+}
+
+function extractMessageId(response: ZeptoMailResponse): string | undefined {
+  return (
+    response.request_id ||
+    response.data?.[0]?.request_id ||
+    response.data?.[0]?.additional_info?.email_reference ||
+    response.data?.[0]?.additional_info?.request_id ||
+    response.error?.request_id
+  );
+}
+
+function buildMimeHeaders(headers: Record<string, string> | null | undefined, html: string): Record<string, string> {
+  const mimeHeaders = headers ? {...headers} : {};
+  const containsUnsubscribeLink = /unsubscribe\/([a-f\d-]+)"/.exec(html);
+
+  if (containsUnsubscribeLink?.[1]) {
+    const unsubscribeId = containsUnsubscribeLink[1];
+    mimeHeaders['List-Unsubscribe'] = `<${DASHBOARD_URI}/unsubscribe/${unsubscribeId}>`;
+  }
+
+  return mimeHeaders;
 }
 
 /**
- * Send a raw email via AWS SES with full MIME formatting
+ * Send an email via ZeptoMail. The exported name intentionally remains
+ * `sendRawEmail` while this private fork migrates away from SES.
  */
 export async function sendRawEmail({
   from,
@@ -92,247 +106,125 @@ export async function sendRawEmail({
   headers,
   attachments,
   tracking = true,
+  clientReference,
 }: SendRawEmailParams): Promise<{messageId: string}> {
-  // Check if the body contains an unsubscribe link
-  const regex = /unsubscribe\/([a-f\d-]+)"/;
-  const containsUnsubscribeLink = regex.exec(content.html);
+  const regularAttachments = attachments?.filter(a => (a.disposition ?? 'attachment') === 'attachment') ?? [];
+  const inlineImages = attachments?.filter(a => a.disposition === 'inline') ?? [];
+  const mimeHeaders = buildMimeHeaders(headers, content.html);
 
-  let unsubscribeHeader = '';
-  if (containsUnsubscribeLink?.[1]) {
-    const unsubscribeId = containsUnsubscribeLink[1];
-    unsubscribeHeader = `List-Unsubscribe: <${DASHBOARD_URI}/unsubscribe/${unsubscribeId}>`;
-  }
-
-  // Generate unique boundaries for multipart messages
-  const altBoundary = `----=_AltPart_${Math.random().toString(36).substring(2)}`;
-  const mixedBoundary = attachments?.some(a => (a.disposition ?? 'attachment') === 'attachment')
-    ? `----=_MixedPart_${Math.random().toString(36).substring(2)}`
-    : null;
-  const relatedBoundary = attachments?.some(a => a.disposition === 'inline')
-    ? `----=_RelatedPart_${Math.random().toString(36).substring(2)}`
-    : null;
-
-  // Format To header with names if provided
-  const toHeader = to
-    .map(recipient => {
-      if (typeof recipient === 'string') {
-        return recipient;
-      } else {
-        return recipient.name ? `${recipient.name} <${recipient.email}>` : recipient.email;
-      }
-    })
-    .join(', ');
-
-  // Extract just email addresses for Destinations (SES requirement)
-  const destinations = to.map(recipient => (typeof recipient === 'string' ? recipient : recipient.email));
-
-  // Determine root content type
-  let rootContentType = `multipart/alternative; boundary="${altBoundary}"`;
-  if (mixedBoundary) {
-    rootContentType = `multipart/mixed; boundary="${mixedBoundary}"`;
-  } else if (relatedBoundary) {
-    rootContentType = `multipart/related; boundary="${relatedBoundary}"`;
-  }
-
-  // Build the additional headers (custom headers + List-Unsubscribe), filtering
-  // out empties so we never emit a blank line inside the header section.
-  // Per RFC 5322 §2.1, a blank line terminates the header section, so any blank
-  // line here would push subsequent headers (notably List-Unsubscribe) into the body.
-  const extraHeaderLines = [
-    ...(headers ? Object.entries(headers).map(([key, value]) => `${key}: ${value}`) : []),
-    ...(unsubscribeHeader ? [unsubscribeHeader] : []),
-  ];
-  const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';
-
-  // Build raw MIME message
-  let rawMessage = `From: ${from.name} <${from.email}>
-To: ${toHeader}
-Reply-To: ${reply || from.email}
-Subject: ${content.subject}
-MIME-Version: 1.0
-Content-Type: ${rootContentType}${extraHeaders}
-
-`;
-
-  // building the body
-  if (mixedBoundary) {
-    rawMessage += `--${mixedBoundary}\n`;
-    if (relatedBoundary) {
-      rawMessage += `Content-Type: multipart/related; boundary="${relatedBoundary}"\n\n`;
-      rawMessage += `--${relatedBoundary}\n`;
-    }
-  } else if (relatedBoundary) {
-    rawMessage += `--${relatedBoundary}\n`;
-  }
-
-  // If we are nested, we need to specify that this next part is the alternative container
-  if (mixedBoundary || relatedBoundary) {
-    rawMessage += `Content-Type: multipart/alternative; boundary="${altBoundary}"\n\n`;
-  }
-
-  // The alternative part content (always contains HTML)
-  rawMessage += `--${altBoundary}
-Content-Type: text/html; charset=utf-8
-Content-Transfer-Encoding: 7bit
-
-${breakLongLines(content.html, 500)}
---${altBoundary}--
-`;
-
-  // Add inline attachments to the related container
-  if (relatedBoundary) {
-    const inlineAttachments = attachments?.filter(a => a.disposition === 'inline') ?? [];
-    for (const attachment of inlineAttachments) {
-      rawMessage += `\n--${relatedBoundary}
-Content-Type: ${attachment.contentType}
-Content-Transfer-Encoding: base64
-Content-ID: <${attachment.contentId || attachment.filename}>
-Content-Disposition: inline; filename="${attachment.filename}"
-
-${breakLongLines(attachment.content, 76, true)}`;
-    }
-    rawMessage += `\n--${relatedBoundary}--`;
-  }
-
-  // Add regular attachments to the mixed container
-  if (mixedBoundary) {
-    const regularAttachments = attachments?.filter(a => (a.disposition ?? 'attachment') === 'attachment') ?? [];
-    for (const attachment of regularAttachments) {
-      rawMessage += `\n--${mixedBoundary}
-Content-Type: ${attachment.contentType}
-Content-Transfer-Encoding: base64
-Content-Disposition: attachment; filename="${attachment.filename}"
-
-${breakLongLines(attachment.content, 76, true)}`;
-    }
-    rawMessage += `\n--${mixedBoundary}--`;
-  }
-
-  // Determine which configuration set to use
-  // Only use NO_TRACKING if tracking toggle is enabled AND tracking is disabled
-  const configurationSetName =
-    TRACKING_TOGGLE_ENABLED && !tracking ? SES_CONFIGURATION_SET_NO_TRACKING : SES_CONFIGURATION_SET;
-
-  // Send via SES
-  const response = await ses.sendRawEmail({
-    Destinations: destinations,
-    ConfigurationSetName: configurationSetName,
-    RawMessage: {
-      Data: new TextEncoder().encode(rawMessage),
+  const payload = {
+    from: {
+      address: from.email,
+      name: from.name,
     },
-    Source: `${from.name} <${from.email}>`,
+    to: to.map(formatRecipient),
+    ...(reply
+      ? {
+          reply_to: [
+            {
+              address: reply,
+            },
+          ],
+        }
+      : {}),
+    subject: content.subject,
+    htmlbody: content.html,
+    track_opens: tracking,
+    track_clicks: tracking,
+    ...(clientReference ? {client_reference: clientReference} : {}),
+    ...(Object.keys(mimeHeaders).length > 0 ? {mime_headers: mimeHeaders} : {}),
+    ...(regularAttachments.length > 0
+      ? {
+          attachments: regularAttachments.map(attachment => ({
+            name: attachment.filename,
+            content: attachment.content,
+            mime_type: attachment.contentType,
+          })),
+        }
+      : {}),
+    ...(inlineImages.length > 0
+      ? {
+          inline_images: inlineImages.map(attachment => ({
+            name: attachment.filename,
+            content: attachment.content,
+            mime_type: attachment.contentType,
+            cid: attachment.contentId || attachment.filename,
+          })),
+        }
+      : {}),
+  };
+
+  const response = await fetch(ZEPTOMAIL_API_URL, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: getAuthorizationHeader(),
+    },
+    body: JSON.stringify(payload),
   });
 
-  if (!response.MessageId) {
-    throw new Error('Could not send email');
+  const bodyText = await response.text();
+  let body: ZeptoMailResponse = {};
+
+  if (bodyText) {
+    try {
+      body = JSON.parse(bodyText) as ZeptoMailResponse;
+    } catch {
+      body = {message: bodyText};
+    }
   }
 
-  return {messageId: response.MessageId};
+  if (!response.ok) {
+    const message = body.error?.message || body.message || response.statusText || 'ZeptoMail send failed';
+    throw new Error(message);
+  }
+
+  const messageId = extractMessageId(body);
+  if (!messageId) {
+    throw new Error('ZeptoMail accepted the email but did not return a request id');
+  }
+
+  return {messageId};
 }
 
 /**
- * Get verification attributes for multiple domain identities
+ * Manual ZeptoMail domain verification: ZeptoMail remains the source of truth.
+ * These compatibility exports keep the old DomainService call sites stable.
  */
 export const getIdentities = async (domains: string[]): Promise<{domain: string; status: string}[]> => {
-  const res = await ses.getIdentityVerificationAttributes({
-    Identities: domains,
-  });
-
-  const parsedResult = Object.entries(res.VerificationAttributes ?? {});
-  return parsedResult.map(obj => {
-    return {domain: obj[0], status: obj[1].VerificationStatus ?? 'NotStarted'};
-  });
+  return domains.map(domain => ({domain, status: 'Success'}));
 };
 
-/**
- * Verify a domain and get DKIM tokens for DNS configuration
- */
-export const verifyDomain = async (domain: string): Promise<string[]> => {
-  // Verify DKIM for the domain
-  const DKIM = await ses.verifyDomainDkim({Domain: domain});
-
-  // Set custom MAIL FROM domain. The subdomain defaults to `plunk` and can be
-  // overridden via the MAIL_FROM_SUBDOMAIN env var — useful when `plunk.<domain>`
-  // is already in use for something else (e.g., a CNAME to a CDN), since the
-  // MAIL FROM subdomain needs MX + TXT records that conflict with a CNAME.
-  await ses.setIdentityMailFromDomain({
-    Identity: domain,
-    MailFromDomain: `${MAIL_FROM_SUBDOMAIN}.${domain}`,
-  });
-
-  return DKIM.DkimTokens ?? [];
+export const verifyDomain = async (_domain: string): Promise<string[]> => {
+  return [];
 };
 
-/**
- * Get DKIM verification attributes for a domain
- */
 export const getDomainVerificationAttributes = async (domain: string) => {
-  const attributes = await ses.getIdentityDkimAttributes({
-    Identities: [domain],
-  });
-
-  const parsedAttributes = Object.entries(attributes.DkimAttributes ?? {});
-
-  if (parsedAttributes.length === 0) {
-    return {
-      domain,
-      tokens: [],
-      status: 'NotStarted',
-    };
-  }
-
-  const firstAttribute = parsedAttributes[0];
-  if (!firstAttribute) {
-    return {
-      domain,
-      tokens: [],
-      status: 'NotStarted',
-    };
-  }
-
   return {
-    domain: firstAttribute[0],
-    tokens: firstAttribute[1].DkimTokens ?? [],
-    status: firstAttribute[1].DkimVerificationStatus ?? 'NotStarted',
+    domain,
+    tokens: [],
+    status: 'Success',
   };
 };
 
-/**
- * Disable bounce/complaint forwarding for a verified domain
- */
-export const disableFeedbackForwarding = async (domain: string): Promise<void> => {
-  await ses.setIdentityFeedbackForwardingEnabled({
-    Identity: domain,
-    ForwardingEnabled: false,
-  });
+export const disableFeedbackForwarding = async (_domain: string): Promise<void> => {
+  return;
 };
 
-/**
- * Delete a verified domain identity from AWS SES
- */
-export const deleteIdentity = async (domain: string): Promise<void> => {
-  await ses.deleteIdentity({Identity: domain});
+export const deleteIdentity = async (_domain: string): Promise<void> => {
+  return;
 };
 
-/**
- * Get AWS SES account sending quota and rate limit
- * @returns MaxSendRate (emails per second) or null if the call fails
- */
 export const getSendingQuota = async (): Promise<{
   maxSendRate: number;
   max24HourSend: number;
   sentLast24Hours: number;
 } | null> => {
-  try {
-    const quota = await ses.getSendQuota({});
-
-    return {
-      maxSendRate: quota.MaxSendRate ?? 14, // Default to sandbox limit if not provided
-      max24HourSend: quota.Max24HourSend ?? 200, // Default sandbox daily limit
-      sentLast24Hours: quota.SentLast24Hours ?? 0,
-    };
-  } catch (error) {
-    signale.error('[SES] Failed to fetch sending quota:', error);
-    return null;
-  }
+  signale.info('[ZEPTOMAIL] Using static sending quota from environment');
+  return {
+    maxSendRate: EMAIL_RATE_LIMIT_PER_SECOND,
+    max24HourSend: EMAIL_DAILY_LIMIT,
+    sentLast24Hours: 0,
+  };
 };

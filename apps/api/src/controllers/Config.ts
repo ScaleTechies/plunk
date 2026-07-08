@@ -3,13 +3,11 @@ import type {Request, Response} from 'express';
 
 import {
   API_URI,
-  AWS_SES_REGION,
   DASHBOARD_URI,
   DISABLE_SIGNUPS,
   GITHUB_OAUTH_ENABLED,
   GOOGLE_OAUTH_ENABLED,
   LANDING_URI,
-  MAIL_FROM_SUBDOMAIN,
   NODE_ENV,
   S3_ENABLED,
   SMTP_DOMAIN,
@@ -65,9 +63,9 @@ export class Config {
             : null,
         },
       },
-      aws: {
-        sesRegion: AWS_SES_REGION,
-        mailFromSubdomain: MAIL_FROM_SUBDOMAIN,
+      emailProvider: {
+        name: 'zeptomail',
+        manualDomainVerification: true,
       },
     });
   }

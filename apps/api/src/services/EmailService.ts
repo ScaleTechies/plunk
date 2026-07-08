@@ -284,8 +284,8 @@ export class EmailService {
   }
 
   /**
-   * Actually send the email via AWS SES
-   * This is called by the email processor worker
+   * Actually send the email via the configured provider.
+   * This is retained for tests and legacy direct callers; production sends use the worker.
    */
   public static async sendEmail(emailId: string): Promise<void> {
     const email = await prisma.email.findUnique({
@@ -401,7 +401,7 @@ export class EmailService {
       // Determine tracking based on project settings and email type
       const shouldTrack = this.shouldTrackEmail(email.project.tracking, email.sourceType);
 
-      // Send via AWS SES
+      // Send via ZeptoMail
       const result = await sendRawEmail({
         from: {
           name: fromName,
@@ -416,9 +416,10 @@ export class EmailService {
         headers: publicHeaders,
         attachments: attachments,
         tracking: shouldTrack,
+        clientReference: email.id,
       });
 
-      // Mark as sent with SES message ID
+      // Mark as sent with provider message ID
       await prisma.email.update({
         where: {id: emailId},
         data: {

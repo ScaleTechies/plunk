@@ -41,7 +41,7 @@ import {Workflows} from './controllers/Workflows.js';
 import {Config} from './controllers/Config.js';
 import {prisma} from './database/prisma.js';
 import {ErrorCode, type FieldError, HttpException, ValidationError} from './exceptions/index.js';
-import {apiRequestCleanupQueue, domainVerificationQueue, segmentCountQueue} from './services/QueueService.js';
+import {apiRequestCleanupQueue, segmentCountQueue} from './services/QueueService.js';
 import * as S3Service from './services/S3Service.js';
 import {requestIdMiddleware} from './middleware/requestId.js';
 import {databaseRequestLogger} from './middleware/requestLogger.js';
@@ -51,8 +51,9 @@ const server = new (class extends Server {
   public constructor() {
     super();
 
-    // Specify that we need raw json for the webhook
+    // Specify that we need raw json for webhooks that validate signatures
     this.app.use('/webhooks/incoming/stripe', raw({type: 'application/json'}));
+    this.app.use('/webhooks/zeptomail', raw({type: '*/*', limit: '2mb'}));
 
     // Set the content-type to JSON for any request coming from AWS SNS
     this.app.use(function (req, res, next) {
@@ -453,20 +454,7 @@ void prisma.$connect().then(async () => {
     }
   }
 
-  // Set up repeatable job for domain verification (BullMQ)
-  // Run every 5 minutes to check domain verification status with AWS SES
-  await domainVerificationQueue.add(
-    'check-domain-verification',
-    {},
-    {
-      repeat: {
-        pattern: '*/5 * * * *', // Every 5 minutes
-      },
-      jobId: 'domain-verification-repeatable', // Fixed ID to prevent duplicates
-    },
-  );
-
-  signale.info('[BACKGROUND-JOB] Domain verification scheduled (BullMQ repeatable job, runs every 5 minutes)');
+  signale.info('[BACKGROUND-JOB] Domain verification polling disabled; domains are verified manually in ZeptoMail');
 
   // Set up repeatable job for segment count updates (BullMQ)
   // Run every 5 minutes to compute membership changes and trigger events

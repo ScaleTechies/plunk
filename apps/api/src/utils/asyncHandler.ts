@@ -17,7 +17,7 @@ export function CatchAsync(target: object, propertyKey: string, descriptor: Prop
   const originalMethod = descriptor.value;
 
   descriptor.value = function (req: Request, res: Response, next: NextFunction) {
-    Promise.resolve(originalMethod.call(this, req, res, next)).catch(next);
+    return Promise.resolve(originalMethod.call(this, req, res, next)).catch(next);
   };
 
   return descriptor;

@@ -12,11 +12,11 @@ describe('DomainService', () => {
   const prisma = getPrismaClient();
 
   beforeEach(() => {
-    // Mock SES service calls to avoid AWS API calls
-    vi.spyOn(SESService, 'verifyDomain').mockResolvedValue(['token1', 'token2', 'token3']);
+    // Mock provider compatibility calls; domain verification is manual in ZeptoMail.
+    vi.spyOn(SESService, 'verifyDomain').mockResolvedValue([]);
     vi.spyOn(SESService, 'getDomainVerificationAttributes').mockResolvedValue({
       status: 'Success',
-      tokens: ['token1', 'token2', 'token3'],
+      tokens: [],
     });
   });
 
@@ -24,7 +24,7 @@ describe('DomainService', () => {
   // ADD DOMAIN
   // ========================================
   describe('addDomain', () => {
-    it('should add a domain and initiate verification', async () => {
+    it('should add a trusted domain as verified for manual ZeptoMail verification', async () => {
       const {project} = await factories.createUserWithProject();
       const domain = 'example.com';
 
@@ -32,12 +32,12 @@ describe('DomainService', () => {
 
       expect(result.domain).toBe(domain);
       expect(result.projectId).toBe(project.id);
-      expect(result.verified).toBe(false);
-      expect(result.dkimTokens).toEqual(['token1', 'token2', 'token3']);
+      expect(result.verified).toBe(true);
+      expect(result.dkimTokens).toEqual([]);
       expect(SESService.verifyDomain).toHaveBeenCalledWith(domain);
     });
 
-    it('should call AWS SES to initiate verification', async () => {
+    it('should call provider compatibility verification hook', async () => {
       const {project} = await factories.createUserWithProject();
       const domain = 'test-domain.com';
 
@@ -149,7 +149,11 @@ describe('DomainService', () => {
     it('should throw error when domain is not verified', async () => {
       const {project} = await factories.createUserWithProject();
 
-      await DomainService.addDomain(project.id, 'unverified.com');
+      await factories.createDomain({
+        projectId: project.id,
+        domain: 'unverified.com',
+        verified: false,
+      });
 
       await expect(DomainService.verifyEmailDomain('sender@unverified.com', project.id)).rejects.toThrow(HttpException);
 
@@ -266,7 +270,7 @@ describe('DomainService', () => {
       const {project} = await factories.createUserWithProject();
 
       const domain1 = await DomainService.addDomain(project.id, 'verified1.com');
-      await DomainService.addDomain(project.id, 'unverified.com');
+      await factories.createDomain({projectId: project.id, domain: 'unverified.com', verified: false});
       const domain3 = await DomainService.addDomain(project.id, 'verified2.com');
 
       // Mark two as verified
@@ -288,8 +292,8 @@ describe('DomainService', () => {
     it('should return empty array when no domains are verified', async () => {
       const {project} = await factories.createUserWithProject();
 
-      await DomainService.addDomain(project.id, 'unverified1.com');
-      await DomainService.addDomain(project.id, 'unverified2.com');
+      await factories.createDomain({projectId: project.id, domain: 'unverified1.com', verified: false});
+      await factories.createDomain({projectId: project.id, domain: 'unverified2.com', verified: false});
 
       const verifiedDomains = await DomainService.getVerifiedDomains(project.id);
 
@@ -301,7 +305,7 @@ describe('DomainService', () => {
   // CHECK VERIFICATION
   // ========================================
   describe('checkVerification', () => {
-    it('should check verification status with AWS SES', async () => {
+    it('should report manual ZeptoMail verification status', async () => {
       const {project} = await factories.createUserWithProject();
 
       const domain = await DomainService.addDomain(project.id, 'check-verification.com');
@@ -309,17 +313,21 @@ describe('DomainService', () => {
       const result = await DomainService.checkVerification(domain.id);
 
       expect(result.domain).toBe('check-verification.com');
-      expect(result.tokens).toEqual(['token1', 'token2', 'token3']);
+      expect(result.tokens).toEqual([]);
       expect(result.status).toBe('Success');
       expect(result.verified).toBe(true);
 
       expect(SESService.getDomainVerificationAttributes).toHaveBeenCalledWith('check-verification.com');
     });
 
-    it('should update domain to verified when SES returns Success', async () => {
+    it('should update domain to verified when manual provider status is Success', async () => {
       const {project} = await factories.createUserWithProject();
 
-      const domain = await DomainService.addDomain(project.id, 'newly-verified.com');
+      const domain = await factories.createDomain({
+        projectId: project.id,
+        domain: 'newly-verified.com',
+        verified: false,
+      });
       expect(domain.verified).toBe(false);
 
       await DomainService.checkVerification(domain.id);
@@ -328,7 +336,7 @@ describe('DomainService', () => {
       expect(updated?.verified).toBe(true);
     });
 
-    it('should update domain to unverified when SES returns Pending', async () => {
+    it('should update domain to unverified when manual provider status is Pending', async () => {
       const {project} = await factories.createUserWithProject();
 
       const domain = await DomainService.addDomain(project.id, 'pending-domain.com');
@@ -339,10 +347,9 @@ describe('DomainService', () => {
         data: {verified: true},
       });
 
-      // Mock SES to return Pending
       vi.spyOn(SESService, 'getDomainVerificationAttributes').mockResolvedValueOnce({
         status: 'Pending',
-        tokens: ['token1', 'token2', 'token3'],
+        tokens: [],
       });
 
       await DomainService.checkVerification(domain.id);

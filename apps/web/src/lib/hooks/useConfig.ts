@@ -20,9 +20,9 @@ export interface ConfigResponse {
       ports: {secure: number; submission: number} | null;
     };
   };
-  aws: {
-    sesRegion: string;
-    mailFromSubdomain: string;
+  emailProvider: {
+    name: string;
+    manualDomainVerification: boolean;
   };
 }
 

@@ -8,12 +8,7 @@ import {HttpException} from '../exceptions/index.js';
 import {Keys} from './keys.js';
 import {MembershipService} from './MembershipService.js';
 import {NtfyService} from './NtfyService.js';
-import {
-  deleteIdentity,
-  disableFeedbackForwarding,
-  getDomainVerificationAttributes,
-  verifyDomain,
-} from './SESService.js';
+import {getDomainVerificationAttributes, verifyDomain} from './SESService.js';
 
 export class DomainService {
   /**
@@ -38,10 +33,14 @@ export class DomainService {
   }
 
   /**
-   * Add a new domain to a project and start verification
+   * Add a new domain to a project.
+   *
+   * ZeptoMail domain/DKIM verification is handled manually in ZeptoMail for this
+   * private fork. Plunk records trusted/admin-added domains as verified so the
+   * existing send-domain ownership guard can continue to work.
    */
   public static async addDomain(projectId: string, domain: string) {
-    // Start verification process with AWS SES
+    // Compatibility call returns [] in the ZeptoMail fork.
     const dkimTokens = await verifyDomain(domain);
 
     // Create domain record
@@ -49,7 +48,7 @@ export class DomainService {
       data: {
         projectId,
         domain,
-        verified: false,
+        verified: true,
         dkimTokens,
       },
       include: {
@@ -125,14 +124,6 @@ export class DomainService {
           },
         },
       });
-
-      // Disable feedback forwarding for verified domain
-      try {
-        await disableFeedbackForwarding(domain.domain);
-        signale.info(`[DOMAIN-SERVICE] Disabled feedback forwarding for ${domain.domain}`);
-      } catch (error) {
-        signale.error(`[DOMAIN-SERVICE] Error disabling feedback forwarding for ${domain.domain}:`, error);
-      }
 
       // Send notification about domain verified
       await NtfyService.notifyDomainVerified(domain.domain, updatedDomain.project.name, updatedDomain.project.id);
@@ -306,18 +297,12 @@ export class DomainService {
       },
     });
 
-    // If domain is not used by any other project, remove it from AWS SES
+    // ZeptoMail domain removal is manual. Plunk only removes its local record.
     if (!domainExistsElsewhere) {
-      try {
-        await deleteIdentity(domainName);
-        signale.info(`[DOMAIN] Removed AWS SES identity for ${domainName} (no longer used by any project)`);
-      } catch (error) {
-        // Log error but don't fail the domain removal if AWS cleanup fails
-        signale.error(`[DOMAIN] Failed to remove AWS SES identity for ${domainName}:`, error);
-      }
+      signale.info(`[DOMAIN] Removed local domain record for ${domainName}. Remove it from ZeptoMail manually if needed.`);
     } else {
       signale.info(
-        `[DOMAIN] Keeping AWS SES identity for ${domainName} (still used by project ${domainExistsElsewhere.projectId})`,
+        `[DOMAIN] Keeping local domain availability for ${domainName} (still used by project ${domainExistsElsewhere.projectId})`,
       );
     }
 

@@ -1,6 +1,7 @@
 import {Controller, Post} from '@overnightjs/core';
 import type {Prisma} from '@plunk/db';
 import {EmailSourceType, EmailStatus} from '@plunk/db';
+import crypto from 'node:crypto';
 import type {Request, Response} from 'express';
 import {simpleParser} from 'mailparser';
 import sanitizeHtml from 'sanitize-html';
@@ -10,7 +11,14 @@ import type Stripe from 'stripe';
 import {ProjectDisabledPaymentEmail, sendPlatformEmail} from '@plunk/email';
 import React from 'react';
 
-import {DASHBOARD_URI, LANDING_URI, STRIPE_ENABLED, STRIPE_WEBHOOK_SECRET} from '../app/constants.js';
+import {
+  DASHBOARD_URI,
+  LANDING_URI,
+  STRIPE_ENABLED,
+  STRIPE_WEBHOOK_SECRET,
+  ZEPTOMAIL_WEBHOOK_AUTH_KEY,
+  ZEPTOMAIL_WEBHOOK_MAX_AGE_SECONDS,
+} from '../app/constants.js';
 import {stripe} from '../app/stripe.js';
 import {prisma} from '../database/prisma.js';
 import {BillingLimitService} from '../services/BillingLimitService.js';
@@ -24,10 +32,283 @@ import {CatchAsync} from '../utils/asyncHandler.js';
 
 /**
  * Webhooks Controller
- * Handles incoming webhooks from external services (AWS SNS/SES)
+ * Handles incoming webhooks from external services
  */
 @Controller('webhooks')
 export class Webhooks {
+  private parseZeptoMailSignature(header: string): {timestamp: number; signature: string; algorithm: string} | null {
+    const decoded = decodeURIComponent(header);
+    const parts = Object.fromEntries(
+      decoded
+        .split(';')
+        .map(part => {
+          const separatorIndex = part.indexOf('=');
+          if (separatorIndex === -1) return null;
+          return [part.slice(0, separatorIndex), part.slice(separatorIndex + 1)] as [string, string];
+        })
+        .filter((part): part is [string, string] => part !== null),
+    );
+
+    const timestamp = Number(parts.ts);
+    const signature = parts.s;
+    const algorithm = parts['s-algorithm'];
+
+    if (!Number.isFinite(timestamp) || !signature || !algorithm) {
+      return null;
+    }
+
+    return {timestamp, signature, algorithm};
+  }
+
+  private getZeptoMailSignedPayload(req: Request): string {
+    const rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : JSON.stringify(req.body ?? {});
+    const contentType = req.get('content-type') ?? '';
+
+    if (contentType.includes('application/x-www-form-urlencoded')) {
+      const params = new URLSearchParams(rawBody);
+      const firstValue = params.values().next().value;
+      return firstValue ?? rawBody;
+    }
+
+    return rawBody;
+  }
+
+  private verifyZeptoMailSignature(req: Request, signedPayload: string): boolean {
+    if (!ZEPTOMAIL_WEBHOOK_AUTH_KEY) {
+      signale.warn('[WEBHOOK] ZeptoMail webhook auth key is not configured');
+      return false;
+    }
+
+    const producerSignature = req.get('producer-signature');
+    if (!producerSignature) {
+      signale.warn('[WEBHOOK] Missing ZeptoMail producer-signature header');
+      return false;
+    }
+
+    const parsed = this.parseZeptoMailSignature(producerSignature);
+    if (!parsed) {
+      signale.warn('[WEBHOOK] Invalid ZeptoMail producer-signature header');
+      return false;
+    }
+
+    if (parsed.algorithm.toLowerCase() !== 'hmacsha256') {
+      signale.warn(`[WEBHOOK] Unsupported ZeptoMail signature algorithm: ${parsed.algorithm}`);
+      return false;
+    }
+
+    const ageMs = Math.abs(Date.now() - parsed.timestamp);
+    if (ageMs > ZEPTOMAIL_WEBHOOK_MAX_AGE_SECONDS * 1000) {
+      signale.warn('[WEBHOOK] ZeptoMail webhook signature timestamp is too old');
+      return false;
+    }
+
+    const expectedSignature = crypto
+      .createHmac('sha256', ZEPTOMAIL_WEBHOOK_AUTH_KEY)
+      .update(signedPayload, 'utf8')
+      .digest('base64');
+
+    const expected = Buffer.from(expectedSignature);
+    const received = Buffer.from(parsed.signature);
+
+    return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+  }
+
+  private getZeptoMailEmailInfo(payload: Record<string, unknown>) {
+    const eventMessage = payload.event_message;
+    if (!eventMessage || typeof eventMessage !== 'object') {
+      return {};
+    }
+
+    const emailInfo = (eventMessage as Record<string, unknown>).email_info;
+    if (!emailInfo || typeof emailInfo !== 'object') {
+      return {};
+    }
+
+    return emailInfo as Record<string, unknown>;
+  }
+
+  private async findEmailForZeptoMailPayload(payload: Record<string, unknown>) {
+    const emailInfo = this.getZeptoMailEmailInfo(payload);
+    const eventMessage = (payload.event_message as Record<string, unknown> | undefined) ?? {};
+    const clientReference = typeof emailInfo.client_reference === 'string' ? emailInfo.client_reference : undefined;
+    const emailReference = typeof emailInfo.email_reference === 'string' ? emailInfo.email_reference : undefined;
+    const requestId =
+      typeof eventMessage.request_id === 'string'
+        ? eventMessage.request_id
+        : typeof payload.request_id === 'string'
+          ? payload.request_id
+          : undefined;
+
+    if (clientReference) {
+      const email = await prisma.email.findUnique({
+        where: {id: clientReference},
+        include: {contact: true, project: true},
+      });
+      if (email) return email;
+    }
+
+    const providerReference = emailReference || requestId;
+    if (!providerReference) {
+      return null;
+    }
+
+    return prisma.email.findUnique({
+      where: {messageId: providerReference},
+      include: {contact: true, project: true},
+    });
+  }
+
+  private getZeptoMailEventType(eventName: string) {
+    const normalized = eventName.toLowerCase().replace(/[_-]+/g, ' ');
+
+    if (normalized.includes('delivered')) return 'delivered';
+    if (normalized.includes('open')) return 'open';
+    if (normalized.includes('click')) return 'click';
+    if (normalized.includes('hard') && normalized.includes('bounce')) return 'hard_bounce';
+    if (normalized.includes('soft') && normalized.includes('bounce')) return 'soft_bounce';
+    if (normalized.includes('feedback') || normalized.includes('complaint')) return 'complaint';
+    if (normalized.includes('failed') || normalized.includes('reject')) return 'failed';
+
+    return 'unknown';
+  }
+
+  /**
+   * Receive ZeptoMail webhook notifications.
+   */
+  @Post('zeptomail')
+  @CatchAsync
+  public async receiveZeptoMailWebhook(req: Request, res: Response) {
+    let signedPayload = '';
+
+    try {
+      signedPayload = this.getZeptoMailSignedPayload(req);
+
+      if (!this.verifyZeptoMailSignature(req, signedPayload)) {
+        return res.status(403).json({success: false, message: 'Invalid ZeptoMail signature'});
+      }
+
+      const payload = JSON.parse(signedPayload) as Record<string, unknown>;
+      const eventName = typeof payload.event_name === 'string' ? payload.event_name : '';
+      const eventType = this.getZeptoMailEventType(eventName);
+
+      if (eventType === 'unknown') {
+        signale.warn(`[WEBHOOK] Unknown ZeptoMail event type: ${eventName}`);
+        return res.status(200).json({success: true});
+      }
+
+      const email = await this.findEmailForZeptoMailPayload(payload);
+      if (!email) {
+        signale.warn('[WEBHOOK] Email not found for ZeptoMail webhook payload');
+        return res.status(404).json({success: false, error: 'Email not found'});
+      }
+
+      const now = new Date();
+      const updateData: Prisma.EmailUpdateInput = {};
+      let plunkEventName = 'email.event';
+      const eventData: Record<string, unknown> = {
+        provider: 'zeptomail',
+        providerEvent: eventName,
+        emailId: email.id,
+        messageId: email.messageId,
+        subject: email.subject,
+        from: email.from,
+        fromName: email.fromName,
+        templateId: email.templateId,
+        campaignId: email.campaignId,
+        sourceType: email.sourceType,
+        payload,
+      };
+
+      switch (eventType) {
+        case 'delivered':
+          updateData.status = EmailStatus.DELIVERED;
+          updateData.deliveredAt = now;
+          plunkEventName = 'email.delivery';
+          eventData.deliveredAt = now.toISOString();
+          break;
+
+        case 'open':
+          if (!email.openedAt) {
+            updateData.openedAt = now;
+          }
+          updateData.opens = (email.opens || 0) + 1;
+          updateData.status = EmailStatus.OPENED;
+          plunkEventName = 'email.open';
+          eventData.openedAt = email.openedAt?.toISOString() || now.toISOString();
+          eventData.opens = (email.opens || 0) + 1;
+          eventData.isFirstOpen = !email.openedAt;
+          break;
+
+        case 'click':
+          if (!email.clickedAt) {
+            updateData.clickedAt = now;
+          }
+          updateData.clicks = (email.clicks || 0) + 1;
+          updateData.status = EmailStatus.CLICKED;
+          plunkEventName = 'email.click';
+          eventData.clickedAt = email.clickedAt?.toISOString() || now.toISOString();
+          eventData.clicks = (email.clicks || 0) + 1;
+          eventData.isFirstClick = !email.clickedAt;
+          break;
+
+        case 'hard_bounce':
+          updateData.status = EmailStatus.BOUNCED;
+          updateData.bouncedAt = now;
+          plunkEventName = 'email.bounce';
+          eventData.bounceType = 'hard';
+          eventData.bouncedAt = now.toISOString();
+          await prisma.contact.update({
+            where: {id: email.contactId},
+            data: {subscribed: false},
+          });
+          await NtfyService.notifyEmailBounce(email.project.name, email.projectId, email.contact.email, 'hard');
+          break;
+
+        case 'soft_bounce':
+          plunkEventName = 'email.bounce';
+          eventData.bounceType = 'soft';
+          eventData.transientBounce = true;
+          break;
+
+        case 'complaint':
+          updateData.status = EmailStatus.COMPLAINED;
+          updateData.complainedAt = now;
+          plunkEventName = 'email.complaint';
+          eventData.complainedAt = now.toISOString();
+          await prisma.contact.update({
+            where: {id: email.contactId},
+            data: {subscribed: false},
+          });
+          await NtfyService.notifyEmailComplaint(email.project.name, email.projectId, email.contact.email);
+          break;
+
+        case 'failed':
+          updateData.status = EmailStatus.FAILED;
+          plunkEventName = 'email.failed';
+          break;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        await prisma.email.update({
+          where: {id: email.id},
+          data: updateData,
+        });
+      }
+
+      await EventService.trackEvent(email.projectId, plunkEventName, email.contactId, email.id, eventData);
+
+      if (eventType === 'hard_bounce' || eventType === 'complaint') {
+        await SecurityService.checkAndEnforceSecurityLimits(email.projectId);
+      }
+
+      signale.success(`[WEBHOOK] Processed ZeptoMail ${eventName} event for email ${email.id}`);
+      return res.status(200).json({success: true});
+    } catch (error) {
+      signale.error('[WEBHOOK] Error processing ZeptoMail webhook:', error, signedPayload);
+      return res.status(200).json({success: true});
+    }
+  }
+
   /**
    * Receive SNS webhook notifications from AWS SES
    * Handles outbound email events: delivery, open, click, bounce, complaint

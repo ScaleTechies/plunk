@@ -22,37 +22,9 @@ import {
   Input,
 } from '@plunk/ui';
 import {AnimatePresence, motion} from 'framer-motion';
-import {Check, CheckCircle2, ChevronDown, Copy, Globe, RefreshCw, Trash2, XCircle} from 'lucide-react';
-import {useConfig} from '../lib/hooks/useConfig';
-import {useAddDomain, useCheckDomainVerification, useDomains, useRemoveDomain} from '../lib/hooks/useDomains';
+import {CheckCircle2, Globe, RefreshCw, Trash2, XCircle} from 'lucide-react';
 
-function AnimatedCopyIcon({isCopied}: {isCopied: boolean}) {
-  return (
-    <AnimatePresence mode="wait" initial={false}>
-      {isCopied ? (
-        <motion.span
-          key="copied"
-          initial={{opacity: 0, y: 4}}
-          animate={{opacity: 1, y: 0}}
-          exit={{opacity: 0, y: -4}}
-          transition={{duration: 0.15}}
-        >
-          <Check className="h-3 w-3 text-green-600" />
-        </motion.span>
-      ) : (
-        <motion.span
-          key="idle"
-          initial={{opacity: 0, y: 4}}
-          animate={{opacity: 1, y: 0}}
-          exit={{opacity: 0, y: -4}}
-          transition={{duration: 0.15}}
-        >
-          <Copy className="h-3 w-3" />
-        </motion.span>
-      )}
-    </AnimatePresence>
-  );
-}
+import {useAddDomain, useCheckDomainVerification, useDomains, useRemoveDomain} from '../lib/hooks/useDomains';
 
 interface DomainsSettingsProps {
   projectId: string;
@@ -63,21 +35,17 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
   const {addDomain} = useAddDomain();
   const {checkVerification} = useCheckDomainVerification();
   const {removeDomain} = useRemoveDomain();
-  const {data: config} = useConfig();
 
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
-  const [verificationStatus, setVerificationStatus] = useState<{
-    [key: string]: boolean | string | {tokens: string[] | null; status: string; verified: boolean};
-  }>({});
   const [checkingVerification, setCheckingVerification] = useState<string | null>(null);
-  const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [lastVerificationCheck, setLastVerificationCheck] = useState<{[key: string]: number}>({});
   const [cooldownSeconds, setCooldownSeconds] = useState<{[key: string]: number}>({});
   const [showRemoveDialog, setShowRemoveDialog] = useState(false);
   const [domainToRemove, setDomainToRemove] = useState<{id: string; name: string} | null>(null);
-  const [expandedDomains, setExpandedDomains] = useState<{[key: string]: boolean}>({});
+  const [verificationStatus, setVerificationStatus] = useState<{
+    [key: string]: boolean | string | {tokens: string[] | null; status: string; verified: boolean};
+  }>({});
 
   const form = useForm<{domain: string}>({
     resolver: zodResolver(DomainSchemas.create.omit({projectId: true})),
@@ -86,7 +54,6 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
     },
   });
 
-  // Handle cooldown timer
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
@@ -108,36 +75,13 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
 
       setCooldownSeconds(newCooldowns);
 
-      // Clear interval if no active cooldowns
       if (!hasActiveCooldowns && Object.keys(newCooldowns).length === 0) {
         clearInterval(interval);
       }
-    }, 100); // Update every 100ms for smooth countdown
+    }, 100);
 
     return () => clearInterval(interval);
   }, [lastVerificationCheck]);
-
-  // Auto-expand unverified domains on initial load
-  useEffect(() => {
-    if (domains && domains.length > 0) {
-      const unverifiedDomains = domains
-        .filter(d => !d.verified)
-        .reduce(
-          (acc, d) => {
-            acc[d.id] = true;
-            return acc;
-          },
-          {} as {[key: string]: boolean},
-        );
-
-      if (Object.keys(unverifiedDomains).length > 0) {
-        setExpandedDomains(prev => ({
-          ...prev,
-          ...unverifiedDomains,
-        }));
-      }
-    }
-  }, [domains]);
 
   const showMessage = (type: 'success' | 'error', message: string) => {
     if (type === 'success') {
@@ -153,42 +97,22 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
   const onSubmit = async (values: {domain: string}) => {
     try {
       setErrorMessage(null);
-      const newDomain = await addDomain(projectId, values.domain);
-
-      // Store DKIM tokens for display
-      if (newDomain.dkimTokens) {
-        setVerificationStatus(prev => ({
-          ...prev,
-          [newDomain.id]: {
-            tokens: newDomain.dkimTokens as string[] | null,
-            status: 'Pending',
-            verified: false,
-          },
-        }));
-        setSelectedDomain(newDomain.id);
-        // Auto-expand newly added domain
-        setExpandedDomains(prev => ({
-          ...prev,
-          [newDomain.id]: true,
-        }));
-      }
-
+      await addDomain(projectId, values.domain);
       await mutateDomains();
       form.reset();
-      showMessage('success', `Domain ${values.domain} added successfully. Please configure DNS records.`);
+      showMessage('success', `Domain ${values.domain} added successfully.`);
     } catch (error) {
       showMessage('error', error instanceof Error ? error.message : 'Failed to add domain');
     }
   };
 
   const handleCheckVerification = async (domainId: string) => {
-    // Check if cooldown is active
     const now = Date.now();
     const lastCheck = lastVerificationCheck[domainId];
     if (lastCheck) {
       const elapsedSeconds = Math.floor((now - lastCheck) / 1000);
       if (elapsedSeconds < 10) {
-        return; // Still in cooldown, do nothing
+        return;
       }
     }
 
@@ -209,9 +133,9 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
       await mutateDomains();
 
       if (status.verified) {
-        showMessage('success', `Domain ${status.domain} is verified!`);
+        showMessage('success', `Domain ${status.domain} is verified.`);
       } else {
-        showMessage('error', `Domain ${status.domain} is not yet verified. Please check your DNS records.`);
+        showMessage('error', `Domain ${status.domain} is not verified in Plunk yet.`);
       }
     } catch (error) {
       showMessage('error', error instanceof Error ? error.message : 'Failed to check verification');
@@ -226,9 +150,6 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
     try {
       await removeDomain(domainToRemove.id);
       await mutateDomains();
-      if (selectedDomain === domainToRemove.id) {
-        setSelectedDomain(null);
-      }
       showMessage('success', `Domain ${domainToRemove.name} removed successfully`);
     } catch (error) {
       showMessage('error', error instanceof Error ? error.message : 'Failed to remove domain');
@@ -237,17 +158,7 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
     }
   };
 
-  const handleCopyToken = async (token: string, index: number) => {
-    await navigator.clipboard.writeText(token);
-    setCopiedToken(`${token}-${index}`);
-    setTimeout(() => setCopiedToken(null), 2000);
-  };
-
-  const getDomainStatus = (domain: {
-    id: string;
-    verified: boolean;
-    dkimTokens: unknown;
-  }): {verified: boolean; tokens: unknown; status: string} => {
+  const getDomainStatus = (domain: {id: string; verified: boolean; dkimTokens: unknown}) => {
     const status = verificationStatus[domain.id];
     if (status && typeof status === 'object' && 'verified' in status) {
       return status;
@@ -257,7 +168,6 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
 
   return (
     <div className="space-y-6">
-      {/* Add Domain Form */}
       <Card>
         <CardHeader>
           <CardTitle>Add Domain</CardTitle>
@@ -280,7 +190,11 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
                 )}
               />
 
-              {/* Success/Error Messages */}
+              <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-600">
+                Verify this domain in ZeptoMail before sending from it. This private fork stores trusted domains as
+                verified in Plunk and uses ZeptoMail as the source of truth for DNS records.
+              </div>
+
               <AnimatePresence mode="wait">
                 {successMessage && (
                   <motion.div
@@ -314,7 +228,6 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
         </CardContent>
       </Card>
 
-      {/* Domains List */}
       <Card>
         <CardHeader>
           <CardTitle>Your Domains</CardTitle>
@@ -335,11 +248,9 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
             <div className="space-y-4">
               {domains.map(domain => {
                 const status = getDomainStatus(domain);
-                const mailFromSubdomain = config?.aws?.mailFromSubdomain ?? 'plunk';
-                const mailFromHost = `${mailFromSubdomain}.${domain.domain}`;
                 return (
                   <div key={domain.id} className="border border-neutral-200 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
                         <h3 className="font-medium text-neutral-900">{domain.domain}</h3>
                         {status.verified ? (
@@ -382,337 +293,6 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
                         </Button>
                       </div>
                     </div>
-
-                    {Array.isArray(status.tokens) && (status.tokens as string[]).length > 0 && (
-                      <div className="mt-3">
-                        <button
-                          onClick={() =>
-                            setExpandedDomains(prev => ({
-                              ...prev,
-                              [domain.id]: !prev[domain.id],
-                            }))
-                          }
-                          className="flex items-center gap-1.5 text-xs text-neutral-600 hover:text-neutral-900 transition-colors"
-                        >
-                          <ChevronDown
-                            className={`h-3.5 w-3.5 transition-transform ${
-                              expandedDomains[domain.id] ? 'rotate-180' : ''
-                            }`}
-                          />
-                          <span>{status.verified ? 'View DNS Records' : 'DNS Configuration Required'}</span>
-                        </button>
-
-                        {expandedDomains[domain.id] && (
-                          <div className="mt-3 space-y-4">
-                            {/* Required DKIM Records for Sending */}
-                            <div>
-                              <div className="flex items-center gap-2 mb-2">
-                                <h4 className="text-xs font-semibold text-neutral-900">Required for Sending</h4>
-                                <Badge variant="default" className="text-[10px] px-1.5 py-0">
-                                  REQUIRED
-                                </Badge>
-                              </div>
-                              {!status.verified && (
-                                <p className="text-xs text-neutral-600 mb-2">
-                                  Add these DKIM records to verify your domain and send emails. DNS changes can take up
-                                  to 48 hours to propagate.
-                                </p>
-                              )}
-
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-xs border-collapse">
-                                  <thead>
-                                    <tr className="border-b border-neutral-200">
-                                      <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                        Type
-                                      </th>
-                                      <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                        Name
-                                      </th>
-                                      <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                        Value
-                                      </th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-neutral-200">
-                                    {/* DKIM Records */}
-                                    {status.tokens.map((token: string, index: number) => (
-                                      <tr key={index} className="hover:bg-neutral-50/50">
-                                        <td className="py-3 px-3">
-                                          <code className="text-xs font-medium text-neutral-900">CNAME</code>
-                                        </td>
-                                        <td className="py-3 px-3">
-                                          <div className="flex items-center gap-2">
-                                            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                                              {token}._domainkey.{domain.domain}
-                                            </code>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() =>
-                                                handleCopyToken(`${token}._domainkey.${domain.domain}`, index + 2000)
-                                              }
-                                              className="shrink-0 h-6 w-6 p-0 overflow-hidden"
-                                            >
-                                              <AnimatedCopyIcon
-                                                isCopied={
-                                                  copiedToken === `${token}._domainkey.${domain.domain}-${index + 2000}`
-                                                }
-                                              />
-                                            </Button>
-                                          </div>
-                                        </td>
-                                        <td className="py-3 px-3">
-                                          <div className="flex items-center gap-2">
-                                            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                                              {token}.dkim.amazonses.com
-                                            </code>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() => handleCopyToken(`${token}.dkim.amazonses.com`, index)}
-                                              className="shrink-0 h-6 w-6 p-0 overflow-hidden"
-                                            >
-                                              <AnimatedCopyIcon
-                                                isCopied={copiedToken === `${token}.dkim.amazonses.com-${index}`}
-                                              />
-                                            </Button>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-
-                            {/* Optional: Custom MAIL FROM Domain */}
-                            {config?.aws?.sesRegion && (
-                              <div>
-                                <div className="flex items-center gap-2 mb-2">
-                                  <h4 className="text-xs font-semibold text-neutral-900">Custom MAIL FROM Domain</h4>
-                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                                    OPTIONAL
-                                  </Badge>
-                                </div>
-                                <p className="text-xs text-neutral-600 mb-2">
-                                  Set up a custom MAIL FROM domain ({mailFromHost}) to improve deliverability and handle
-                                  bounces/complaints.
-                                </p>
-
-                                <div className="overflow-x-auto">
-                                  <table className="w-full text-xs border-collapse">
-                                    <thead>
-                                      <tr className="border-b border-neutral-200">
-                                        <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                          Type
-                                        </th>
-                                        <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                          Name
-                                        </th>
-                                        <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                          Value
-                                        </th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-neutral-200">
-                                      {/* MX Record (Bounce/Complaint Handling) */}
-                                      <tr className="hover:bg-neutral-50/50">
-                                        <td className="py-3 px-3">
-                                          <code className="text-xs font-medium text-neutral-900">MX</code>
-                                        </td>
-                                        <td className="py-3 px-3">
-                                          <div className="flex items-center gap-2">
-                                            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                                              {mailFromHost}
-                                            </code>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() => handleCopyToken(mailFromHost, 3000)}
-                                              className="shrink-0 h-6 w-6 p-0 overflow-hidden"
-                                            >
-                                              <AnimatedCopyIcon
-                                                isCopied={copiedToken === `${mailFromHost}-3000`}
-                                              />
-                                            </Button>
-                                          </div>
-                                        </td>
-                                        <td className="py-3 px-3">
-                                          <div className="flex items-center gap-2">
-                                            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                                              10 feedback-smtp.{config.aws.sesRegion}.amazonses.com
-                                            </code>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() =>
-                                                handleCopyToken(
-                                                  `10 feedback-smtp.${config.aws.sesRegion}.amazonses.com`,
-                                                  1000,
-                                                )
-                                              }
-                                              className="shrink-0 h-6 w-6 p-0 overflow-hidden"
-                                            >
-                                              <AnimatedCopyIcon
-                                                isCopied={
-                                                  copiedToken ===
-                                                  `10 feedback-smtp.${config.aws.sesRegion}.amazonses.com-1000`
-                                                }
-                                              />
-                                            </Button>
-                                          </div>
-                                        </td>
-                                      </tr>
-
-                                      {/* TXT Record (SPF) */}
-                                      <tr className="hover:bg-neutral-50/50">
-                                        <td className="py-3 px-3">
-                                          <code className="text-xs font-medium text-neutral-900">TXT</code>
-                                        </td>
-                                        <td className="py-3 px-3">
-                                          <div className="flex items-center gap-2">
-                                            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                                              {mailFromHost}
-                                            </code>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() => handleCopyToken(mailFromHost, 3001)}
-                                              className="shrink-0 h-6 w-6 p-0 overflow-hidden"
-                                            >
-                                              <AnimatedCopyIcon
-                                                isCopied={copiedToken === `${mailFromHost}-3001`}
-                                              />
-                                            </Button>
-                                          </div>
-                                        </td>
-                                        <td className="py-3 px-3">
-                                          <div className="flex items-center gap-2">
-                                            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                                              &quot;v=spf1 include:amazonses.com ~all&quot;
-                                            </code>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() =>
-                                                handleCopyToken('"v=spf1 include:amazonses.com ~all"', 1001)
-                                              }
-                                              className="shrink-0 h-6 w-6 p-0 overflow-hidden"
-                                            >
-                                              <AnimatedCopyIcon
-                                                isCopied={copiedToken === '"v=spf1 include:amazonses.com ~all"-1001'}
-                                              />
-                                            </Button>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Optional: Inbound Email */}
-                            {config?.aws?.sesRegion && (
-                              <div>
-                                <div className="flex items-center gap-2 mb-2">
-                                  <h4 className="text-xs font-semibold text-neutral-900">Inbound Email</h4>
-                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                                    OPTIONAL
-                                  </Badge>
-                                </div>
-                                <p className="text-xs text-neutral-600 mb-2">
-                                  Configure this MX record to receive emails at your domain.
-                                </p>
-
-                                <div className="overflow-x-auto">
-                                  <table className="w-full text-xs border-collapse">
-                                    <thead>
-                                      <tr className="border-b border-neutral-200">
-                                        <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                          Type
-                                        </th>
-                                        <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                          Name
-                                        </th>
-                                        <th className="text-left py-2 px-3 font-medium text-neutral-700 bg-neutral-50">
-                                          Value
-                                        </th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-neutral-200">
-                                      {/* Inbound MX Record */}
-                                      <tr className="hover:bg-neutral-50/50">
-                                        <td className="py-3 px-3">
-                                          <code className="text-xs font-medium text-neutral-900">MX</code>
-                                        </td>
-                                        <td className="py-3 px-3">
-                                          <div className="flex items-center gap-2">
-                                            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                                              {domain.domain}
-                                            </code>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() => handleCopyToken(domain.domain, 3002)}
-                                              className="shrink-0 h-6 w-6 p-0 overflow-hidden"
-                                            >
-                                              <AnimatedCopyIcon isCopied={copiedToken === `${domain.domain}-3002`} />
-                                            </Button>
-                                          </div>
-                                        </td>
-                                        <td className="py-3 px-3">
-                                          <div className="flex items-center gap-2">
-                                            <code className="text-xs font-mono text-neutral-700 break-all flex-1">
-                                              10 inbound-smtp.{config.aws.sesRegion}.amazonaws.com
-                                            </code>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() =>
-                                                handleCopyToken(
-                                                  `10 inbound-smtp.${config.aws.sesRegion}.amazonaws.com`,
-                                                  1002,
-                                                )
-                                              }
-                                              className="shrink-0 h-6 w-6 p-0 overflow-hidden"
-                                            >
-                                              <AnimatedCopyIcon
-                                                isCopied={
-                                                  copiedToken ===
-                                                  `10 inbound-smtp.${config.aws.sesRegion}.amazonaws.com-1002`
-                                                }
-                                              />
-                                            </Button>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </div>
-                            )}
-
-                            <div className="flex items-start gap-2 p-3 bg-neutral-50 rounded-lg border border-neutral-200 mt-3">
-                              <div className="text-neutral-500 mt-0.5">
-                                <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                                  <path
-                                    fillRule="evenodd"
-                                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                                    clipRule="evenodd"
-                                  />
-                                </svg>
-                              </div>
-                              <p className="text-xs text-neutral-600">
-                                Click the copy icon to copy record values. After adding all records to your DNS
-                                provider, use the refresh button above to verify your domain.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })}

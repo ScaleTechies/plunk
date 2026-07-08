@@ -531,7 +531,7 @@ model Email {
   headers     Json? // Custom email headers
   attachments Json? // Array of {filename: string, content: string (base64), contentType: string}
 
-  // AWS SES Message ID (for tracking webhooks)
+  // Provider message ID/reference (for tracking webhooks)
   messageId String? @unique
 
   // Source - identifies how this email was triggered
@@ -772,7 +772,7 @@ enum EmailSourceType {
   TRANSACTIONAL // Sent via API call
   CAMPAIGN // Sent as part of broadcast
   WORKFLOW // Sent via workflow automation
-  INBOUND // Received via SES inbound
+  INBOUND // Received by the platform
 }
 
 enum EmailStatus {

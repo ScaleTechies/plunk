@@ -1,32 +1,22 @@
-import {beforeEach, describe, expect, it, vi, type Mock} from 'vitest';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {EmailSourceType, EmailStatus, TemplateType} from '@plunk/db';
 import {ActionSchemas} from '@plunk/shared';
 import {EmailService} from '../EmailService';
 import {sendRawEmail} from '../SESService';
 import {factories, getPrismaClient} from '../../../../../test/helpers';
 
-// Mock AWS SDK globally (used by real SESService calls in MIME tests)
-vi.mock('@aws-sdk/client-ses', () => {
-  const SESMock = vi.fn();
-  SESMock.prototype.sendRawEmail = vi.fn().mockResolvedValue({MessageId: 'test-message-id'});
-  return {SES: SESMock};
-});
-
-// Mock constants to provide AWS credentials for SESService, preserving other exports
+// Mock constants to provide provider env values for service imports.
 vi.mock('../../app/constants.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../app/constants.js')>();
   return {
     ...actual,
-    AWS_SES_ACCESS_KEY_ID: 'test-key-id',
-    AWS_SES_REGION: 'us-east-1',
-    AWS_SES_SECRET_ACCESS_KEY: 'test-secret',
-    SES_CONFIGURATION_SET: 'test-config-set',
-    SES_CONFIGURATION_SET_NO_TRACKING: 'test-no-tracking-set',
+    ZEPTOMAIL_SEND_TOKEN: 'test-token',
+    ZEPTOMAIL_API_URL: 'https://api.zeptomail.test/v1.1/email',
     TRACKING_TOGGLE_ENABLED: true,
   };
 });
 
-// Mock SES service (default behavior for most tests)
+// Mock provider service (default behavior for most tests)
 vi.mock('../SESService', () => ({
   sendRawEmail: vi.fn(),
 }));
@@ -50,9 +40,9 @@ describe('EmailService', () => {
       verified: true,
     });
 
-    // Mock successful SES send by default
+    // Mock successful provider send by default
     vi.mocked(sendRawEmail).mockResolvedValue({
-      messageId: 'ses-message-123',
+      messageId: 'zepto-message-123',
     });
   });
 
@@ -359,7 +349,7 @@ describe('EmailService', () => {
 
         expect(sent?.status).toBe(EmailStatus.SENT);
         expect(sent?.sentAt).not.toBeNull();
-        expect(sent?.messageId).toBe('ses-message-123');
+        expect(sent?.messageId).toBe('zepto-message-123');
       });
 
       it('should create email.sent event after successful send', async () => {
@@ -381,13 +371,13 @@ describe('EmailService', () => {
         });
 
         expect(event).toBeDefined();
-        expect(event?.data).toHaveProperty('messageId', 'ses-message-123');
+        expect(event?.data).toHaveProperty('messageId', 'zepto-message-123');
       });
     });
 
     describe('PENDING → SENDING → FAILED', () => {
-      it('should mark as FAILED on SES error', async () => {
-        vi.mocked(sendRawEmail).mockRejectedValue(new Error('SES rate limit exceeded'));
+      it('should mark as FAILED on provider error', async () => {
+        vi.mocked(sendRawEmail).mockRejectedValue(new Error('ZeptoMail rate limit exceeded'));
 
         const email = await factories.createEmail({
           projectId,
@@ -963,141 +953,5 @@ describe('EmailService', () => {
       expect(result.success).toBe(false);
     });
 
-  });
-});
-
-// ========================================
-// SES MIME BOUNDARY STRUCTURE
-// ========================================
-// These tests verify the raw MIME assembly logic inside sendRawEmail.
-// They need the REAL sendRawEmail (not the mock above), so we mock
-// at the AWS SDK level instead.
-
-describe('SES MIME Boundary Structure', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('should correctly structure MIME boundaries for mixed content (attachments)', async () => {
-    const {sendRawEmail: realSendRawEmail, ses} = await vi.importActual<typeof import('../SESService')>('../SESService');
-
-    const params = {
-      from: {name: 'Sender', email: 'sender@example.com'},
-      to: ['recipient@example.com'],
-      content: {subject: 'Test Subject', html: '<p>Hello world</p>'},
-      attachments: [
-        {
-          filename: 'test.txt',
-          content: 'SGVsbG8=',
-          contentType: 'text/plain',
-          disposition: 'attachment' as const,
-        },
-      ],
-    };
-
-    await realSendRawEmail(params);
-
-    expect(ses.sendRawEmail).toHaveBeenCalled();
-    const callArgs = (ses.sendRawEmail as Mock).mock.calls[0][0];
-    const rawMessage = new TextDecoder().decode(callArgs.RawMessage.Data);
-
-    // Verify boundary hierarchy: Mixed -> Alternative
-    expect(rawMessage).toMatch(/^From:.*Content-Type: multipart\/mixed; boundary="([^"]+)"/s);
-    expect(rawMessage).toMatch(/Content-Type: multipart\/alternative; boundary="([^"]+)"/);
-
-    const mixedBoundaryMatch = rawMessage.match(/boundary="([^"]+)"/);
-    const mixedBoundary = mixedBoundaryMatch ? mixedBoundaryMatch[1] : '';
-
-    expect(rawMessage).toContain(`--${mixedBoundary}\nContent-Type: multipart/alternative`);
-    expect(rawMessage).toContain(`--${mixedBoundary}--`);
-  });
-
-  it('should correctly structure MIME boundaries for related content (inline images)', async () => {
-    const {sendRawEmail: realSendRawEmail, ses} = await vi.importActual<typeof import('../SESService')>('../SESService');
-
-    const params = {
-      from: {name: 'Sender', email: 'sender@example.com'},
-      to: ['recipient@example.com'],
-      content: {subject: 'Test Subject', html: '<p>Hello world <img src="cid:image1"></p>'},
-      attachments: [
-        {
-          filename: 'image.png',
-          content:
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-          contentType: 'image/png',
-          contentId: 'image1',
-          disposition: 'inline' as const,
-        },
-      ],
-    };
-
-    await realSendRawEmail(params);
-
-    const callArgs = (ses.sendRawEmail as Mock).mock.calls[0][0];
-    const rawMessage = new TextDecoder().decode(callArgs.RawMessage.Data);
-
-    // Verify boundary hierarchy: Related -> Alternative
-    expect(rawMessage).toMatch(/^From:.*Content-Type: multipart\/related; boundary="([^"]+)"/s);
-
-    const relatedBoundaryMatch = rawMessage.match(/boundary="([^"]+)"/);
-    const relatedBoundary = relatedBoundaryMatch ? relatedBoundaryMatch[1] : '';
-
-    expect(rawMessage).toContain(`--${relatedBoundary}\nContent-Type: multipart/alternative`);
-    expect(rawMessage).toContain(`Content-Disposition: inline; filename="image.png"`);
-    expect(rawMessage).toContain(`--${relatedBoundary}--`);
-  });
-
-  it('should correctly nest mixed > related > alternative boundaries', async () => {
-    const {sendRawEmail: realSendRawEmail, ses} = await vi.importActual<typeof import('../SESService')>('../SESService');
-
-    const params = {
-      from: {name: 'Sender', email: 'sender@example.com'},
-      to: ['recipient@example.com'],
-      content: {subject: 'Test Subject', html: '<p>Hello world <img src="cid:image1"></p>'},
-      attachments: [
-        {
-          filename: 'test.txt',
-          content: 'SGVsbG8=',
-          contentType: 'text/plain',
-          disposition: 'attachment' as const,
-        },
-        {
-          filename: 'image.png',
-          content:
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-          contentType: 'image/png',
-          contentId: 'image1',
-          disposition: 'inline' as const,
-        },
-      ],
-    };
-
-    await realSendRawEmail(params);
-
-    const callArgs = (ses.sendRawEmail as Mock).mock.calls[0][0];
-    const rawMessage = new TextDecoder().decode(callArgs.RawMessage.Data);
-
-    // Root should be mixed
-    expect(rawMessage).toMatch(/^From:.*Content-Type: multipart\/mixed; boundary="([^"]+)"/s);
-
-    const mixedMatch = rawMessage.match(/Content-Type: multipart\/mixed; boundary="([^"]+)"/);
-    const mixedBoundary = mixedMatch ? mixedMatch[1] : 'NOT_FOUND_MIXED';
-
-    // Within mixed, we should find related
-    expect(rawMessage).toContain(`--${mixedBoundary}\nContent-Type: multipart/related`);
-
-    const relatedMatch = rawMessage.match(/Content-Type: multipart\/related; boundary="([^"]+)"/);
-    const relatedBoundary = relatedMatch ? relatedMatch[1] : 'NOT_FOUND_RELATED';
-
-    // Within related, we should find alternative
-    expect(rawMessage).toContain(`--${relatedBoundary}\nContent-Type: multipart/alternative`);
-
-    const altMatch = rawMessage.match(/Content-Type: multipart\/alternative; boundary="([^"]+)"/);
-    const altBoundary = altMatch ? altMatch[1] : 'NOT_FOUND_ALT';
-
-    // Verify all closing boundaries exist
-    expect(rawMessage).toContain(`--${altBoundary}--`);
-    expect(rawMessage).toContain(`--${relatedBoundary}--`);
-    expect(rawMessage).toContain(`--${mixedBoundary}--`);
   });
 });

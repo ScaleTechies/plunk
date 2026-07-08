@@ -25,37 +25,34 @@ import {getSendingQuota, sendRawEmail} from '../services/SESService.js';
 
 /**
  * Determine the email sending rate limit (emails per second)
- * Priority: ENV variable > AWS SES quota > Safe default (14)
+ * Priority: ENV/static ZeptoMail quota > fallback
  */
 async function getEmailRateLimit(): Promise<number> {
-  const DEFAULT_RATE_LIMIT = 14; // AWS SES sandbox limit - safe default
+  const DEFAULT_RATE_LIMIT = 2;
 
-  // If env variable is set, use it (override)
   if (EMAIL_RATE_LIMIT_PER_SECOND !== undefined) {
     signale.info(`[EMAIL-PROCESSOR] Using rate limit from environment: ${EMAIL_RATE_LIMIT_PER_SECOND} emails/second`);
     return EMAIL_RATE_LIMIT_PER_SECOND;
   }
 
-  // Try to fetch from AWS SES
-  signale.info('[EMAIL-PROCESSOR] Fetching rate limit from AWS SES...');
+  signale.info('[EMAIL-PROCESSOR] Fetching static ZeptoMail quota...');
   const quota = await getSendingQuota();
 
   if (quota) {
     signale.info(
-      `[EMAIL-PROCESSOR] AWS SES quota: ${quota.maxSendRate} emails/second (${quota.sentLast24Hours}/${quota.max24HourSend} emails sent today)`,
+      `[EMAIL-PROCESSOR] ZeptoMail quota: ${quota.maxSendRate} emails/second (${quota.sentLast24Hours}/${quota.max24HourSend} emails sent today)`,
     );
     return quota.maxSendRate;
   }
 
-  // Fallback to safe default
-  signale.warn(`[EMAIL-PROCESSOR] Failed to fetch AWS quota, using safe default: ${DEFAULT_RATE_LIMIT} emails/second`);
+  signale.warn(`[EMAIL-PROCESSOR] Failed to resolve quota, using safe default: ${DEFAULT_RATE_LIMIT} emails/second`);
   return DEFAULT_RATE_LIMIT;
 }
 
 /**
- * Derive worker concurrency from the rate limit so a higher SES quota actually
+ * Derive worker concurrency from the rate limit so the configured quota
  * translates into higher throughput. The mean job duration is ~0.5s (Prisma
- * reads + HTML compile + SES call + writes), so `rate * 0.5` gives ~2× headroom
+ * reads + HTML compile + provider call + writes), so `rate * 0.5` gives ~2x headroom
  * over the per-second cap. Clamped to keep sandbox accounts useful and to
  * protect the Prisma pool on very large quotas.
  */
@@ -211,7 +208,7 @@ export async function createEmailWorker() {
           throw new Error(`Project ${email.projectId} has been disabled due to a policy violation`);
         }
 
-        // Send via AWS SES
+        // Send via ZeptoMail
         const result = await sendRawEmail({
           from: {
             name: fromName,
@@ -226,9 +223,10 @@ export async function createEmailWorker() {
           headers: publicHeaders,
           tracking: shouldTrack,
           attachments: email.attachments as {filename: string; content: string; contentType: string}[] | null,
+          clientReference: email.id,
         });
 
-        // Mark as sent with SES message ID
+        // Mark as sent with provider message ID
         await prisma.email.update({
           where: {id: emailId},
           data: {
@@ -282,7 +280,7 @@ export async function createEmailWorker() {
       connection: emailQueue.opts.connection,
       concurrency,
       limiter: {
-        max: rateLimit, // Max emails per second (from env, AWS SES quota, or default)
+        max: rateLimit, // Max emails per second
         duration: 1000,
       },
     },
