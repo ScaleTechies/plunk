@@ -1,4 +1,5 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {factories} from '../../../../../test/helpers';
 
 vi.mock('../../app/constants.js', () => ({
   DASHBOARD_URI: 'https://dashboard.example.com',
@@ -115,6 +116,62 @@ describe('ZeptoMail-backed SESService compatibility layer', () => {
         content: {subject: 'Test', html: '<p>Hello</p>'},
       }),
     ).resolves.toEqual({messageId: 'email-ref-123'});
+  });
+
+  it('uses project-specific ZeptoMail token when projectId is provided', async () => {
+    const {project} = await factories.createUserWithProject({}, {zeptomailSendToken: 'project-token'});
+
+    await sendRawEmail({
+      projectId: project.id,
+      from: {name: 'Sender', email: 'sender@example.com'},
+      to: ['recipient@example.com'],
+      content: {subject: 'Test', html: '<p>Hello</p>'},
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.zeptomail.test/v1.1/email',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Zoho-enczapikey project-token',
+        }),
+      }),
+    );
+  });
+
+  it('rejects sends without a project-specific ZeptoMail token', async () => {
+    const {project} = await factories.createUserWithProject({}, {zeptomailSendToken: null});
+
+    await expect(
+      sendRawEmail({
+        projectId: project.id,
+        from: {name: 'Sender', email: 'sender@example.com'},
+        to: ['recipient@example.com'],
+        content: {subject: 'Test', html: '<p>Hello</p>'},
+      }),
+    ).rejects.toThrow('Project ZeptoMail send token is not configured');
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('enforces a configured project sender address', async () => {
+    const {project} = await factories.createUserWithProject(
+      {},
+      {
+        zeptomailSendToken: 'project-token',
+        zeptomailSenderAddress: 'approved@example.com',
+      },
+    );
+
+    await expect(
+      sendRawEmail({
+        projectId: project.id,
+        from: {name: 'Sender', email: 'other@example.com'},
+        to: ['recipient@example.com'],
+        content: {subject: 'Test', html: '<p>Hello</p>'},
+      }),
+    ).rejects.toThrow("Sender address must match the project's configured ZeptoMail sender");
+
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('throws useful errors for ZeptoMail failures', async () => {

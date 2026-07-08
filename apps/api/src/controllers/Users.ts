@@ -7,6 +7,7 @@ import type {NextFunction, Request, Response} from 'express';
 import {DASHBOARD_URI, STRIPE_ENABLED, STRIPE_PRICE_EMAIL_USAGE, STRIPE_PRICE_ONBOARDING} from '../app/constants.js';
 import {stripe} from '../app/stripe.js';
 import {prisma} from '../database/prisma.js';
+import {redis} from '../database/redis.js';
 import {ErrorCode, HttpException, NotAuthenticated, NotFound} from '../exceptions/index.js';
 import {isAuthenticated, requireEmailVerified} from '../middleware/auth.js';
 import {BillingLimitService} from '../services/BillingLimitService.js';
@@ -14,6 +15,8 @@ import {MembershipService} from '../services/MembershipService.js';
 import {NtfyService} from '../services/NtfyService.js';
 import {SecurityService} from '../services/SecurityService.js';
 import {UserService} from '../services/UserService.js';
+import {ProjectService} from '../services/ProjectService.js';
+import {Keys} from '../services/keys.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
 import signale from 'signale';
 
@@ -111,13 +114,45 @@ export class Users {
     // Verify user has admin/owner access to this project
     await MembershipService.requireAdminAccess(auth.userId!, id);
 
+    const {
+      zeptomailSendToken,
+      zeptomailAgentAlias,
+      zeptomailSenderAddress,
+      zeptomailWebhookAuthKey,
+      zeptomailWebhookHeaderKey,
+      zeptomailWebhookHeaderValue,
+      ...projectData
+    } = data;
+
+    const updateData = {
+      ...projectData,
+      ...(typeof zeptomailAgentAlias !== 'undefined'
+        ? {zeptomailAgentAlias: zeptomailAgentAlias.trim() || null}
+        : {}),
+      ...(typeof zeptomailSenderAddress !== 'undefined'
+        ? {zeptomailSenderAddress: zeptomailSenderAddress.trim().toLowerCase() || null}
+        : {}),
+      ...(typeof zeptomailWebhookHeaderKey !== 'undefined'
+        ? {zeptomailWebhookHeaderKey: zeptomailWebhookHeaderKey.trim() || null}
+        : {}),
+      ...(zeptomailSendToken?.trim() ? {zeptomailSendToken: zeptomailSendToken.trim()} : {}),
+      ...(zeptomailWebhookAuthKey?.trim() ? {zeptomailWebhookAuthKey: zeptomailWebhookAuthKey.trim()} : {}),
+      ...(zeptomailWebhookHeaderValue?.trim()
+        ? {zeptomailWebhookHeaderValue: zeptomailWebhookHeaderValue.trim()}
+        : {}),
+    };
+
     // Update the project
     const project = await prisma.project.update({
       where: {id},
-      data,
+      data: updateData,
     });
 
-    return res.status(200).json(project);
+    await redis.del(Keys.Project.id(id));
+    await redis.del(Keys.Project.public(project.public));
+    await redis.del(Keys.Project.secret(project.secret));
+
+    return res.status(200).json(ProjectService.sanitize(project));
   }
 
   @Post('@me/projects/:id/regenerate-keys')

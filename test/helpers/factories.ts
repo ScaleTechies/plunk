@@ -39,6 +39,12 @@ export interface ProjectFactoryOptions {
   billingLimitWorkflows?: number | null;
   billingLimitCampaigns?: number | null;
   billingLimitTransactional?: number | null;
+  zeptomailSendToken?: string | null;
+  zeptomailAgentAlias?: string | null;
+  zeptomailSenderAddress?: string | null;
+  zeptomailWebhookAuthKey?: string | null;
+  zeptomailWebhookHeaderKey?: string | null;
+  zeptomailWebhookHeaderValue?: string | null;
 }
 
 export interface ContactFactoryOptions {
@@ -135,6 +141,12 @@ export class TestFactories {
         billingLimitWorkflows: options.billingLimitWorkflows,
         billingLimitCampaigns: options.billingLimitCampaigns,
         billingLimitTransactional: options.billingLimitTransactional,
+        zeptomailSendToken: options.zeptomailSendToken === undefined ? 'test-token' : options.zeptomailSendToken,
+        zeptomailAgentAlias: options.zeptomailAgentAlias,
+        zeptomailSenderAddress: options.zeptomailSenderAddress,
+        zeptomailWebhookAuthKey: options.zeptomailWebhookAuthKey,
+        zeptomailWebhookHeaderKey: options.zeptomailWebhookHeaderKey,
+        zeptomailWebhookHeaderValue: options.zeptomailWebhookHeaderValue,
       },
     });
   }

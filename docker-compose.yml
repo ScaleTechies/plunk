@@ -147,9 +147,10 @@ services:
       LANDING_URI: ${LANDING_URI:-}
       WIKI_URI: ${WIKI_URI:-}
 
-      # ZeptoMail (for sending emails)
-      ZEPTOMAIL_SEND_TOKEN: ${ZEPTOMAIL_SEND_TOKEN}
+      # ZeptoMail fallback (project-level credentials are preferred)
+      ZEPTOMAIL_SEND_TOKEN: ${ZEPTOMAIL_SEND_TOKEN:-}
       ZEPTOMAIL_API_URL: ${ZEPTOMAIL_API_URL:-https://api.zeptomail.com/v1.1/email}
+      # Legacy fallback for /webhooks/zeptomail; project-scoped webhook keys are preferred.
       ZEPTOMAIL_WEBHOOK_AUTH_KEY: ${ZEPTOMAIL_WEBHOOK_AUTH_KEY:-}
       ZEPTOMAIL_WEBHOOK_MAX_AGE_SECONDS: ${ZEPTOMAIL_WEBHOOK_MAX_AGE_SECONDS:-300}
 

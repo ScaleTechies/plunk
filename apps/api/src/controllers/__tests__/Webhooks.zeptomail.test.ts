@@ -37,14 +37,26 @@ function signedHeader(payload: string, secret = 'webhook-secret') {
   return `ts=${timestamp};s=${encodeURIComponent(signature)};s-algorithm=HmacSHA256`;
 }
 
-function makeReq(payload: Record<string, unknown>, signature = signedHeader(JSON.stringify(payload))) {
+function makeReq(
+  payload: Record<string, unknown>,
+  projectId: string,
+  options: {
+    signature?: string;
+    headers?: Record<string, string>;
+  } = {},
+) {
   const body = Buffer.from(JSON.stringify(payload));
+  const signature = 'signature' in options ? options.signature : signedHeader(JSON.stringify(payload));
+  const headers = options.headers ?? {};
 
   return {
+    params: {projectId},
     body,
     get: (header: string) => {
       if (header.toLowerCase() === 'producer-signature') return signature;
       if (header.toLowerCase() === 'content-type') return 'application/json';
+      const headerEntry = Object.entries(headers).find(([key]) => key.toLowerCase() === header.toLowerCase());
+      if (headerEntry) return headerEntry[1];
       return undefined;
     },
   } as unknown as Request;
@@ -91,7 +103,7 @@ describe('ZeptoMail webhooks', () => {
   });
 
   it('accepts a valid delivered event and updates email status', async () => {
-    const {project} = await factories.createUserWithProject();
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
     const contact = await factories.createContact({projectId: project.id});
     const email = await factories.createEmail(project.id, contact.id, {
       status: EmailStatus.SENT,
@@ -101,7 +113,7 @@ describe('ZeptoMail webhooks', () => {
     const payload = zeptoPayload('Delivered', email.id);
     const res = makeRes();
 
-    await controller.receiveZeptoMailWebhook(makeReq(payload), res);
+    await controller.receiveZeptoMailProjectWebhook(makeReq(payload, project.id), res);
 
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({success: true});
@@ -117,7 +129,7 @@ describe('ZeptoMail webhooks', () => {
   });
 
   it('rejects invalid signatures before mutating email state', async () => {
-    const {project} = await factories.createUserWithProject();
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
     const contact = await factories.createContact({projectId: project.id});
     const email = await factories.createEmail(project.id, contact.id, {
       status: EmailStatus.SENT,
@@ -127,7 +139,10 @@ describe('ZeptoMail webhooks', () => {
     const payload = zeptoPayload('Delivered', email.id);
     const res = makeRes();
 
-    await controller.receiveZeptoMailWebhook(makeReq(payload, signedHeader(JSON.stringify(payload), 'wrong-secret')), res);
+    await controller.receiveZeptoMailProjectWebhook(
+      makeReq(payload, project.id, {signature: signedHeader(JSON.stringify(payload), 'wrong-secret')}),
+      res,
+    );
 
     expect(res.statusCode).toBe(403);
 
@@ -137,7 +152,7 @@ describe('ZeptoMail webhooks', () => {
   });
 
   it('hard bounces unsubscribe contacts', async () => {
-    const {project} = await factories.createUserWithProject();
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
     const contact = await factories.createContact({projectId: project.id, subscribed: true});
     const email = await factories.createEmail(project.id, contact.id, {
       status: EmailStatus.SENT,
@@ -147,7 +162,7 @@ describe('ZeptoMail webhooks', () => {
     const payload = zeptoPayload('Hard Bounce', email.id);
     const res = makeRes();
 
-    await controller.receiveZeptoMailWebhook(makeReq(payload), res);
+    await controller.receiveZeptoMailProjectWebhook(makeReq(payload, project.id), res);
 
     expect(res.statusCode).toBe(200);
 
@@ -160,7 +175,7 @@ describe('ZeptoMail webhooks', () => {
   });
 
   it('soft bounces track an event without unsubscribing contacts', async () => {
-    const {project} = await factories.createUserWithProject();
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
     const contact = await factories.createContact({projectId: project.id, subscribed: true});
     const email = await factories.createEmail(project.id, contact.id, {
       status: EmailStatus.SENT,
@@ -170,7 +185,7 @@ describe('ZeptoMail webhooks', () => {
     const payload = zeptoPayload('Soft Bounce', email.id);
     const res = makeRes();
 
-    await controller.receiveZeptoMailWebhook(makeReq(payload), res);
+    await controller.receiveZeptoMailProjectWebhook(makeReq(payload, project.id), res);
 
     expect(res.statusCode).toBe(200);
 
@@ -184,5 +199,112 @@ describe('ZeptoMail webhooks', () => {
       where: {emailId: email.id, name: 'email.bounce'},
     });
     expect(event).not.toBeNull();
+  });
+
+  it('rejects project-scoped webhooks without a configured project webhook key', async () => {
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: null});
+    const contact = await factories.createContact({projectId: project.id});
+    const email = await factories.createEmail(project.id, contact.id, {
+      status: EmailStatus.SENT,
+      messageId: 'zepto-request-id',
+    });
+
+    const payload = zeptoPayload('Delivered', email.id);
+    const res = makeRes();
+
+    await controller.receiveZeptoMailProjectWebhook(makeReq(payload, project.id), res);
+
+    expect(res.statusCode).toBe(403);
+
+    const updated = await prisma.email.findUnique({where: {id: email.id}});
+    expect(updated?.status).toBe(EmailStatus.SENT);
+    expect(updated?.deliveredAt).toBeNull();
+  });
+
+  it('rejects signed project webhooks that reference another project email', async () => {
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
+    const {project: otherProject} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
+    const contact = await factories.createContact({projectId: otherProject.id});
+    const email = await factories.createEmail(otherProject.id, contact.id, {
+      status: EmailStatus.SENT,
+      messageId: 'zepto-request-id',
+    });
+
+    const payload = zeptoPayload('Delivered', email.id);
+    const res = makeRes();
+
+    await controller.receiveZeptoMailProjectWebhook(makeReq(payload, project.id), res);
+
+    expect(res.statusCode).toBe(404);
+
+    const updated = await prisma.email.findUnique({where: {id: email.id}});
+    expect(updated?.status).toBe(EmailStatus.SENT);
+    expect(updated?.deliveredAt).toBeNull();
+  });
+
+  it('accepts a valid custom authorization header without producer-signature', async () => {
+    const {project} = await factories.createUserWithProject(
+      {},
+      {
+        zeptomailWebhookAuthKey: null,
+        zeptomailWebhookHeaderKey: 'x-plunk-webhook-secret',
+        zeptomailWebhookHeaderValue: 'header-secret',
+      },
+    );
+    const contact = await factories.createContact({projectId: project.id});
+    const email = await factories.createEmail(project.id, contact.id, {
+      status: EmailStatus.SENT,
+      messageId: 'zepto-request-id',
+    });
+
+    const payload = zeptoPayload('Delivered', email.id);
+    const res = makeRes();
+
+    await controller.receiveZeptoMailProjectWebhook(
+      makeReq(payload, project.id, {
+        signature: undefined,
+        headers: {'x-plunk-webhook-secret': 'header-secret'},
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+
+    const updated = await prisma.email.findUnique({where: {id: email.id}});
+    expect(updated?.status).toBe(EmailStatus.DELIVERED);
+    expect(updated?.deliveredAt).not.toBeNull();
+  });
+
+  it('rejects webhooks with an invalid custom authorization header', async () => {
+    const {project} = await factories.createUserWithProject(
+      {},
+      {
+        zeptomailWebhookAuthKey: null,
+        zeptomailWebhookHeaderKey: 'x-plunk-webhook-secret',
+        zeptomailWebhookHeaderValue: 'header-secret',
+      },
+    );
+    const contact = await factories.createContact({projectId: project.id});
+    const email = await factories.createEmail(project.id, contact.id, {
+      status: EmailStatus.SENT,
+      messageId: 'zepto-request-id',
+    });
+
+    const payload = zeptoPayload('Delivered', email.id);
+    const res = makeRes();
+
+    await controller.receiveZeptoMailProjectWebhook(
+      makeReq(payload, project.id, {
+        signature: undefined,
+        headers: {'x-plunk-webhook-secret': 'wrong-secret'},
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(403);
+
+    const updated = await prisma.email.findUnique({where: {id: email.id}});
+    expect(updated?.status).toBe(EmailStatus.SENT);
+    expect(updated?.deliveredAt).toBeNull();
   });
 });

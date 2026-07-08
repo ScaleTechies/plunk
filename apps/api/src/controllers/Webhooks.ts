@@ -73,8 +73,8 @@ export class Webhooks {
     return rawBody;
   }
 
-  private verifyZeptoMailSignature(req: Request, signedPayload: string): boolean {
-    if (!ZEPTOMAIL_WEBHOOK_AUTH_KEY) {
+  private verifyZeptoMailSignature(req: Request, signedPayload: string, authKey: string): boolean {
+    if (!authKey) {
       signale.warn('[WEBHOOK] ZeptoMail webhook auth key is not configured');
       return false;
     }
@@ -103,7 +103,7 @@ export class Webhooks {
     }
 
     const expectedSignature = crypto
-      .createHmac('sha256', ZEPTOMAIL_WEBHOOK_AUTH_KEY)
+      .createHmac('sha256', authKey)
       .update(signedPayload, 'utf8')
       .digest('base64');
 
@@ -111,6 +111,81 @@ export class Webhooks {
     const received = Buffer.from(parsed.signature);
 
     return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+  }
+
+  private verifyZeptoMailHeader(req: Request, headerKey: string, headerValue: string): boolean {
+    const received = req.get(headerKey);
+    if (!received) {
+      signale.warn(`[WEBHOOK] Missing ZeptoMail authorization header: ${headerKey}`);
+      return false;
+    }
+
+    const expectedBuffer = Buffer.from(headerValue);
+    const receivedBuffer = Buffer.from(received);
+
+    return (
+      expectedBuffer.length === receivedBuffer.length &&
+      crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+    );
+  }
+
+  private async getZeptoMailWebhookAuthConfig(projectId?: string): Promise<{
+    signatureAuthKey: string | null;
+    headerKey: string | null;
+    headerValue: string | null;
+  }> {
+    if (!projectId) {
+      return {
+        signatureAuthKey: ZEPTOMAIL_WEBHOOK_AUTH_KEY || null,
+        headerKey: null,
+        headerValue: null,
+      };
+    }
+
+    const project = await prisma.project.findUnique({
+      where: {id: projectId},
+      select: {
+        zeptomailWebhookAuthKey: true,
+        zeptomailWebhookHeaderKey: true,
+        zeptomailWebhookHeaderValue: true,
+      },
+    });
+
+    return {
+      signatureAuthKey: project?.zeptomailWebhookAuthKey || null,
+      headerKey: project?.zeptomailWebhookHeaderKey || null,
+      headerValue: project?.zeptomailWebhookHeaderValue || null,
+    };
+  }
+
+  private verifyZeptoMailWebhookAuth(
+    req: Request,
+    signedPayload: string,
+    config: {
+      signatureAuthKey: string | null;
+      headerKey: string | null;
+      headerValue: string | null;
+    },
+  ): boolean {
+    const hasSignatureAuth = Boolean(config.signatureAuthKey);
+    const hasHeaderAuth = Boolean(config.headerKey && config.headerValue);
+
+    if (!hasSignatureAuth && !hasHeaderAuth) {
+      signale.warn('[WEBHOOK] No ZeptoMail webhook auth method is configured');
+      return false;
+    }
+
+    if (hasSignatureAuth && req.get('producer-signature')) {
+      if (this.verifyZeptoMailSignature(req, signedPayload, config.signatureAuthKey!)) {
+        return true;
+      }
+    }
+
+    if (hasHeaderAuth) {
+      return this.verifyZeptoMailHeader(req, config.headerKey!, config.headerValue!);
+    }
+
+    return false;
   }
 
   private getZeptoMailEmailInfo(payload: Record<string, unknown>) {
@@ -178,13 +253,27 @@ export class Webhooks {
   @Post('zeptomail')
   @CatchAsync
   public async receiveZeptoMailWebhook(req: Request, res: Response) {
+    return this.receiveZeptoMailWebhookForProject(req, res);
+  }
+
+  /**
+   * Receive ZeptoMail webhook notifications for a specific project/Mail Agent.
+   */
+  @Post('zeptomail/:projectId')
+  @CatchAsync
+  public async receiveZeptoMailProjectWebhook(req: Request, res: Response) {
+    return this.receiveZeptoMailWebhookForProject(req, res, req.params.projectId);
+  }
+
+  private async receiveZeptoMailWebhookForProject(req: Request, res: Response, projectId?: string) {
     let signedPayload = '';
 
     try {
       signedPayload = this.getZeptoMailSignedPayload(req);
+      const webhookAuthConfig = await this.getZeptoMailWebhookAuthConfig(projectId);
 
-      if (!this.verifyZeptoMailSignature(req, signedPayload)) {
-        return res.status(403).json({success: false, message: 'Invalid ZeptoMail signature'});
+      if (!this.verifyZeptoMailWebhookAuth(req, signedPayload, webhookAuthConfig)) {
+        return res.status(403).json({success: false, message: 'Invalid ZeptoMail webhook authorization'});
       }
 
       const payload = JSON.parse(signedPayload) as Record<string, unknown>;
@@ -199,6 +288,11 @@ export class Webhooks {
       const email = await this.findEmailForZeptoMailPayload(payload);
       if (!email) {
         signale.warn('[WEBHOOK] Email not found for ZeptoMail webhook payload');
+        return res.status(404).json({success: false, error: 'Email not found'});
+      }
+
+      if (projectId && email.projectId !== projectId) {
+        signale.warn('[WEBHOOK] ZeptoMail webhook project does not match email project');
         return res.status(404).json({success: false, error: 'Email not found'});
       }
 

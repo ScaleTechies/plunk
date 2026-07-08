@@ -673,7 +673,7 @@ describe('EmailService', () => {
       expect(email.attachments).toBeNull();
     });
 
-    it('should pass attachments to SES when sending', async () => {
+    it('should pass attachments to ZeptoMail when sending', async () => {
       const attachment = {
         filename: 'test.txt',
         content: Buffer.from('Test content').toString('base64'),
@@ -692,7 +692,7 @@ describe('EmailService', () => {
       // Send the email
       await EmailService.sendEmail(email.id);
 
-      // Verify SES was called with attachments
+      // Verify provider send was called with attachments
       expect(vi.mocked(sendRawEmail)).toHaveBeenCalledWith(
         expect.objectContaining({
           attachments: [attachment],

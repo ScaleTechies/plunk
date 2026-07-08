@@ -7,6 +7,7 @@ import {
   ZEPTOMAIL_API_URL,
   ZEPTOMAIL_SEND_TOKEN,
 } from '../app/constants.js';
+import {prisma} from '../database/prisma.js';
 
 interface SendRawEmailParams {
   from: {
@@ -31,7 +32,14 @@ interface SendRawEmailParams {
     | null;
   tracking?: boolean;
   clientReference?: string;
+  projectId?: string;
 }
+
+type ZeptoMailSendConfig = {
+  sendToken: string;
+  agentAlias?: string | null;
+  senderAddress?: string | null;
+};
 
 type ZeptoMailResponse = {
   request_id?: string;
@@ -66,10 +74,53 @@ function formatRecipient(recipient: string | {name?: string; email: string}) {
   };
 }
 
-function getAuthorizationHeader() {
-  return ZEPTOMAIL_SEND_TOKEN.startsWith('Zoho-enczapikey ')
-    ? ZEPTOMAIL_SEND_TOKEN
-    : `Zoho-enczapikey ${ZEPTOMAIL_SEND_TOKEN}`;
+function getAuthorizationHeader(sendToken: string) {
+  return sendToken.startsWith('Zoho-enczapikey ') ? sendToken : `Zoho-enczapikey ${sendToken}`;
+}
+
+async function getProjectSendConfig(projectId?: string): Promise<ZeptoMailSendConfig> {
+  if (projectId) {
+    const project = await prisma.project.findUnique({
+      where: {id: projectId},
+      select: {
+        zeptomailSendToken: true,
+        zeptomailAgentAlias: true,
+        zeptomailSenderAddress: true,
+      },
+    });
+
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+
+    if (!project.zeptomailSendToken) {
+      throw new Error('Project ZeptoMail send token is not configured');
+    }
+
+    return {
+      sendToken: project.zeptomailSendToken,
+      agentAlias: project.zeptomailAgentAlias,
+      senderAddress: project.zeptomailSenderAddress,
+    };
+  }
+
+  if (!ZEPTOMAIL_SEND_TOKEN) {
+    throw new Error('ZeptoMail send token is not configured');
+  }
+
+  return {
+    sendToken: ZEPTOMAIL_SEND_TOKEN,
+  };
+}
+
+function validateProjectSender(config: ZeptoMailSendConfig, fromEmail: string) {
+  if (!config.senderAddress) {
+    return;
+  }
+
+  if (config.senderAddress.toLowerCase() !== fromEmail.toLowerCase()) {
+    throw new Error(`Sender address must match the project's configured ZeptoMail sender (${config.senderAddress})`);
+  }
 }
 
 function extractMessageId(response: ZeptoMailResponse): string | undefined {
@@ -107,7 +158,11 @@ export async function sendRawEmail({
   attachments,
   tracking = true,
   clientReference,
+  projectId,
 }: SendRawEmailParams): Promise<{messageId: string}> {
+  const sendConfig = await getProjectSendConfig(projectId);
+  validateProjectSender(sendConfig, from.email);
+
   const regularAttachments = attachments?.filter(a => (a.disposition ?? 'attachment') === 'attachment') ?? [];
   const inlineImages = attachments?.filter(a => a.disposition === 'inline') ?? [];
   const mimeHeaders = buildMimeHeaders(headers, content.html);
@@ -159,7 +214,7 @@ export async function sendRawEmail({
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      Authorization: getAuthorizationHeader(),
+      Authorization: getAuthorizationHeader(sendConfig.sendToken),
     },
     body: JSON.stringify(payload),
   });

@@ -63,6 +63,15 @@ import useSWR from 'swr';
 
 type TabId = 'general' | 'billing' | 'domains' | 'smtp' | 'data' | 'team' | 'security';
 
+type ProjectZeptoMailSettings = {
+  zeptomailAgentAlias?: string | null;
+  zeptomailSenderAddress?: string | null;
+  zeptomailSendTokenSet?: boolean;
+  zeptomailWebhookAuthKeySet?: boolean;
+  zeptomailWebhookHeaderKey?: string | null;
+  zeptomailWebhookHeaderValueSet?: boolean;
+};
+
 interface Tab {
   id: TabId;
   label: string;
@@ -123,6 +132,11 @@ export default function Settings() {
         portSubmission: config?.features.smtp.ports?.submission,
       }
     : {enabled: false as const};
+  const zeptomailProject = activeProject as (typeof activeProject & ProjectZeptoMailSettings) | null;
+  const zeptoWebhookUrl =
+    activeProject && config?.urls.api
+      ? `${config.urls.api.replace(/\/$/, '')}/webhooks/zeptomail/${activeProject.id}`
+      : '';
 
   // Get current tab from URL or default to 'general'
   const currentTab = (router.query.tab as TabId) || 'general';
@@ -174,6 +188,12 @@ export default function Settings() {
       name: activeProject?.name || '',
       tracking: activeProject?.tracking ?? TrackingMode.ENABLED,
       language: activeProject?.language || 'en',
+      zeptomailSendToken: '',
+      zeptomailAgentAlias: zeptomailProject?.zeptomailAgentAlias || '',
+      zeptomailSenderAddress: zeptomailProject?.zeptomailSenderAddress || '',
+      zeptomailWebhookAuthKey: '',
+      zeptomailWebhookHeaderKey: zeptomailProject?.zeptomailWebhookHeaderKey || 'x-plunk-webhook-secret',
+      zeptomailWebhookHeaderValue: '',
     },
   });
 
@@ -184,9 +204,21 @@ export default function Settings() {
         name: activeProject.name,
         tracking: activeProject.tracking ?? TrackingMode.ENABLED,
         language: activeProject.language || 'en',
+        zeptomailSendToken: '',
+        zeptomailAgentAlias: zeptomailProject?.zeptomailAgentAlias || '',
+        zeptomailSenderAddress: zeptomailProject?.zeptomailSenderAddress || '',
+        zeptomailWebhookAuthKey: '',
+        zeptomailWebhookHeaderKey: zeptomailProject?.zeptomailWebhookHeaderKey || 'x-plunk-webhook-secret',
+        zeptomailWebhookHeaderValue: '',
       });
     }
-  }, [activeProject, form]);
+  }, [
+    activeProject,
+    form,
+    zeptomailProject?.zeptomailAgentAlias,
+    zeptomailProject?.zeptomailSenderAddress,
+    zeptomailProject?.zeptomailWebhookHeaderKey,
+  ]);
 
   const onSubmit = async (values: z.infer<typeof ProjectSchemas.update>) => {
     if (!activeProject) return;
@@ -195,10 +227,17 @@ export default function Settings() {
       setErrorMessage(null);
       setSuccessMessage(null);
 
+      const payload = {
+        ...values,
+        zeptomailSendToken: values.zeptomailSendToken?.trim() || undefined,
+        zeptomailWebhookAuthKey: values.zeptomailWebhookAuthKey?.trim() || undefined,
+        zeptomailWebhookHeaderValue: values.zeptomailWebhookHeaderValue?.trim() || undefined,
+      };
+
       const updatedProject = await network.fetch<typeof activeProject, typeof ProjectSchemas.update>(
         'PATCH',
         `/users/@me/projects/${activeProject.id}`,
-        values,
+        payload,
       );
 
       // Update the active project in context without invalidating the full SWR cache
@@ -491,6 +530,167 @@ export default function Settings() {
                           </FormItem>
                         )}
                       />
+
+                      <div className="border-t border-neutral-200 pt-6 space-y-4">
+                        <div>
+                          <h3 className="text-sm font-medium text-neutral-900">ZeptoMail</h3>
+                          <p className="text-sm text-neutral-500 mt-1">
+                            Configure the Mail Agent credentials and webhook key used by this project.
+                          </p>
+                        </div>
+
+                        <FormField
+                          control={form.control}
+                          name="zeptomailSendToken"
+                          render={({field}) => (
+                            <FormItem>
+                              <FormLabel>Authorization Token</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="password"
+                                  autoComplete="new-password"
+                                  placeholder={
+                                    zeptomailProject?.zeptomailSendTokenSet
+                                      ? 'Token configured. Enter a new token to replace it.'
+                                      : 'Zoho-enczapikey...'
+                                  }
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {zeptomailProject?.zeptomailSendTokenSet
+                                  ? 'Leave blank to keep the current token.'
+                                  : 'Required before this project can send email.'}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name="zeptomailAgentAlias"
+                          render={({field}) => (
+                            <FormItem>
+                              <FormLabel>Agent Alias</FormLabel>
+                              <FormControl>
+                                <Input placeholder="Mail Agent alias" {...field} />
+                              </FormControl>
+                              <FormDescription>
+                                Stored for project isolation and matching this project to the correct ZeptoMail Mail Agent.
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name="zeptomailSenderAddress"
+                          render={({field}) => (
+                            <FormItem>
+                              <FormLabel>Sender Address</FormLabel>
+                              <FormControl>
+                                <Input type="email" placeholder="sender@example.com" {...field} />
+                              </FormControl>
+                              <FormDescription>
+                                When set, this project can only send from this exact address.
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        {zeptoWebhookUrl && (
+                          <ApiKeyDisplay
+                            label="Webhook URL"
+                            value={zeptoWebhookUrl}
+                            description="Use this URL in the matching ZeptoMail Mail Agent webhook settings."
+                          />
+                        )}
+
+                        <FormField
+                          control={form.control}
+                          name="zeptomailWebhookAuthKey"
+                          render={({field}) => (
+                            <FormItem>
+                              <FormLabel>Webhook Auth Key</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="password"
+                                  autoComplete="new-password"
+                                  placeholder={
+                                    zeptomailProject?.zeptomailWebhookAuthKeySet
+                                      ? 'Webhook key configured. Enter a new key to replace it.'
+                                      : 'Create a shared webhook auth key'
+                                  }
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {zeptomailProject?.zeptomailWebhookAuthKeySet
+                                  ? 'Leave blank to keep the current webhook key. Enter the same key in ZeptoMail for this Agent.'
+                                  : 'Create a shared key here, then enter the same key in ZeptoMail for this Agent.'}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-4 space-y-4">
+                          <div>
+                            <h4 className="text-sm font-medium text-neutral-900">Authorization Headers</h4>
+                            <p className="text-xs text-neutral-500 mt-1">
+                              Copy these into ZeptoMail&apos;s Authorization headers fields for this webhook.
+                            </p>
+                          </div>
+
+                          <FormField
+                            control={form.control}
+                            name="zeptomailWebhookHeaderKey"
+                            render={({field}) => (
+                              <FormItem>
+                                <FormLabel>Authorization Header Key</FormLabel>
+                                <FormControl>
+                                  <Input placeholder="x-plunk-webhook-secret" {...field} />
+                                </FormControl>
+                                <FormDescription>
+                                  Enter this in ZeptoMail&apos;s authorization key field.
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+
+                          <FormField
+                            control={form.control}
+                            name="zeptomailWebhookHeaderValue"
+                            render={({field}) => (
+                              <FormItem>
+                                <FormLabel>Authorization Header Value</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="password"
+                                    autoComplete="new-password"
+                                    placeholder={
+                                      zeptomailProject?.zeptomailWebhookHeaderValueSet
+                                        ? 'Header value configured. Enter a new value to replace it.'
+                                        : 'Create a shared header value'
+                                    }
+                                    {...field}
+                                  />
+                                </FormControl>
+                                <FormDescription>
+                                  {zeptomailProject?.zeptomailWebhookHeaderValueSet
+                                    ? 'Leave blank to keep the current value. Enter the same value in ZeptoMail.'
+                                    : 'Create a shared value here, then enter the same value in ZeptoMail.'}
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+                      </div>
 
                       {/* Success/Error Messages */}
                       <AnimatePresence mode="wait">

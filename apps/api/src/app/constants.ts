@@ -40,8 +40,8 @@ export const S3_PUBLIC_URL = validateEnv('S3_PUBLIC_URL', '');
 export const S3_FORCE_PATH_STYLE = validateEnv('S3_FORCE_PATH_STYLE', 'true') === 'true';
 export const S3_ENABLED = S3_ACCESS_KEY_ID !== '' && S3_ACCESS_KEY_SECRET !== '';
 
-// ZeptoMail (required for email sending)
-export const ZEPTOMAIL_SEND_TOKEN = validateEnv('ZEPTOMAIL_SEND_TOKEN');
+// ZeptoMail (optional fallback; project-level tokens are preferred for sending)
+export const ZEPTOMAIL_SEND_TOKEN = validateEnv('ZEPTOMAIL_SEND_TOKEN', '');
 export const ZEPTOMAIL_API_URL = validateEnv('ZEPTOMAIL_API_URL', 'https://api.zeptomail.com/v1.1/email');
 export const ZEPTOMAIL_WEBHOOK_AUTH_KEY = validateEnv('ZEPTOMAIL_WEBHOOK_AUTH_KEY', '');
 export const ZEPTOMAIL_WEBHOOK_MAX_AGE_SECONDS = Number(validateEnv('ZEPTOMAIL_WEBHOOK_MAX_AGE_SECONDS', '300'));
@@ -52,13 +52,12 @@ export const EMAIL_RATE_LIMIT_PER_SECOND = process.env.EMAIL_RATE_LIMIT_PER_SECO
   : 2;
 
 // Static daily limit used for worker quota reporting. ZeptoMail does not expose
-// an SES-style quota endpoint through the send-mail token.
+// a quota endpoint through the send-mail token.
 export const EMAIL_DAILY_LIMIT = Number(validateEnv('EMAIL_DAILY_LIMIT', '5000'));
 
 // Email Worker Concurrency (optional override)
-// If not set, concurrency is derived from the effective rate limit so a higher
-// SES quota actually translates into higher throughput. Set this to pin a fixed
-// value (useful when Prisma pool size or memory is the binding constraint).
+// If not set, concurrency is derived from the effective rate limit. Set this to
+// pin a fixed value when Prisma pool size or memory is the binding constraint.
 export const EMAIL_WORKER_CONCURRENCY = process.env.EMAIL_WORKER_CONCURRENCY
   ? Number(process.env.EMAIL_WORKER_CONCURRENCY)
   : undefined;

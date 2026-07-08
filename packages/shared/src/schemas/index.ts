@@ -87,6 +87,12 @@ export const ProjectSchemas = {
       .string()
       .regex(/^[a-z]{2}(-[A-Z]{2})?$/)
       .optional(),
+    zeptomailSendToken: z.string().max(4096).optional(),
+    zeptomailAgentAlias: z.string().max(255).optional(),
+    zeptomailSenderAddress: z.union([email, z.literal('')]).optional(),
+    zeptomailWebhookAuthKey: z.string().max(4096).optional(),
+    zeptomailWebhookHeaderKey: z.string().max(255).optional(),
+    zeptomailWebhookHeaderValue: z.string().max(4096).optional(),
   }),
 } as const;
 

@@ -1,6 +1,6 @@
 /**
  * Background Job: Domain Verification Checker
- * Checks domain verification status with AWS SES
+ * Checks domain verification status with the configured email provider.
  *
  * This is processed by BullMQ workers (see domain-verification-processor.ts)
  * Scheduled to run every 5 minutes via repeatable jobs
@@ -27,7 +27,7 @@ export async function checkDomainVerifications() {
     const count = await prisma.domain.count();
     signale.info(`[DOMAIN-VERIFICATION] Found ${count} domains to check`);
 
-    // Process domains in batches of 99 (AWS SES limit is 100)
+    // Process domains in bounded batches to avoid provider/API pressure.
     for (let i = 0; i < count; i += 99) {
       const domains = await prisma.domain.findMany({
         select: {
@@ -47,22 +47,22 @@ export async function checkDomainVerifications() {
         continue;
       }
 
-      // Get verification status from AWS SES
-      const sesIdentities = await getIdentities(domains.map(d => d.domain));
+      // Get verification status from the provider compatibility layer.
+      const providerIdentities = await getIdentities(domains.map(d => d.domain));
 
-      // Update each domain based on SES status
-      for (const sesIdentity of sesIdentities) {
-        const dbDomain = domains.find(d => d.domain === sesIdentity.domain);
+      // Update each domain based on provider status.
+      for (const providerIdentity of providerIdentities) {
+        const dbDomain = domains.find(d => d.domain === providerIdentity.domain);
 
         if (!dbDomain) {
           continue;
         }
 
-        const isVerified = sesIdentity.status === 'Success';
+        const isVerified = providerIdentity.status === 'Success';
 
         // If domain failed verification, retry
-        if (sesIdentity.status === 'Failed') {
-          signale.warn(`[DOMAIN-VERIFICATION] Restarting verification for ${sesIdentity.domain}`);
+        if (providerIdentity.status === 'Failed') {
+          signale.warn(`[DOMAIN-VERIFICATION] Restarting verification for ${providerIdentity.domain}`);
 
           let attempt = 0;
           const maxAttempts = 5;
@@ -71,9 +71,9 @@ export async function checkDomainVerifications() {
 
           while (attempt < maxAttempts && !success) {
             try {
-              await verifyDomain(sesIdentity.domain);
+              await verifyDomain(providerIdentity.domain);
               success = true;
-              signale.success(`[DOMAIN-VERIFICATION] Restarted verification for ${sesIdentity.domain}`);
+              signale.success(`[DOMAIN-VERIFICATION] Restarted verification for ${providerIdentity.domain}`);
             } catch (e: unknown) {
               const error = e as {Code?: string; name?: string; message?: string};
               if (
@@ -98,7 +98,7 @@ export async function checkDomainVerifications() {
 
           if (!success) {
             signale.error(
-              `[DOMAIN-VERIFICATION] Failed to verify ${sesIdentity.domain} after ${maxAttempts} attempts due to throttling`,
+              `[DOMAIN-VERIFICATION] Failed to verify ${providerIdentity.domain} after ${maxAttempts} attempts due to throttling`,
             );
           }
         }
@@ -111,11 +111,11 @@ export async function checkDomainVerifications() {
 
         // If domain was just verified, disable feedback forwarding
         if (!dbDomain.verified && isVerified) {
-          signale.success(`[DOMAIN-VERIFICATION] Domain ${sesIdentity.domain} is now verified!`);
+          signale.success(`[DOMAIN-VERIFICATION] Domain ${providerIdentity.domain} is now verified!`);
 
           try {
-            await disableFeedbackForwarding(sesIdentity.domain);
-            signale.info(`[DOMAIN-VERIFICATION] Disabled feedback forwarding for ${sesIdentity.domain}`);
+            await disableFeedbackForwarding(providerIdentity.domain);
+            signale.info(`[DOMAIN-VERIFICATION] Disabled feedback forwarding for ${providerIdentity.domain}`);
           } catch (error) {
             signale.error(`[DOMAIN-VERIFICATION] Error disabling feedback forwarding: ${error}`);
           }
@@ -135,7 +135,7 @@ export async function checkDomainVerifications() {
                 const template = React.createElement(DomainVerifiedEmail, {
                   projectName: dbDomain.project.name,
                   projectId: dbDomain.projectId,
-                  domain: sesIdentity.domain,
+                  domain: providerIdentity.domain,
                   dashboardUrl: DASHBOARD_URI,
                   landingUrl: LANDING_URI,
                 });
@@ -155,7 +155,7 @@ export async function checkDomainVerifications() {
 
         // If domain was unverified, invalidate cache
         if (dbDomain.verified && !isVerified) {
-          signale.warn(`[DOMAIN-VERIFICATION] Domain ${sesIdentity.domain} is no longer verified`);
+          signale.warn(`[DOMAIN-VERIFICATION] Domain ${providerIdentity.domain} is no longer verified`);
 
           // Send email notification about domain verification failed
           try {
@@ -176,7 +176,7 @@ export async function checkDomainVerifications() {
                 const template = React.createElement(DomainUnverifiedEmail, {
                   projectName: dbDomain.project.name,
                   projectId: dbDomain.projectId,
-                  domain: sesIdentity.domain,
+                  domain: providerIdentity.domain,
                   dashboardUrl: DASHBOARD_URI,
                   landingUrl: LANDING_URI,
                 });

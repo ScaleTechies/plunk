@@ -5,6 +5,7 @@ import {prisma} from '../database/prisma.js';
 import {wrapRedis} from '../database/redis.js';
 
 import {Keys} from './keys.js';
+import {ProjectService} from './ProjectService.js';
 
 /**
  * Extract base domain from URL for cookie sharing across subdomains
@@ -80,7 +81,7 @@ export class UserService {
       },
     });
 
-    return memberships ? memberships.map(({project}) => project) : [];
+    return memberships ? memberships.map(({project}) => ProjectService.sanitize(project)) : [];
   }
 
   /**

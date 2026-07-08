@@ -224,6 +224,7 @@ export async function createEmailWorker() {
           tracking: shouldTrack,
           attachments: email.attachments as {filename: string; content: string; contentType: string}[] | null,
           clientReference: email.id,
+          projectId: email.projectId,
         });
 
         // Mark as sent with provider message ID

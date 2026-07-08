@@ -172,13 +172,13 @@ describe('Email Processor', () => {
         where: {id: email.id},
         data: {
           status: EmailStatus.FAILED,
-          error: 'SES send failed: Invalid email address',
+          error: 'ZeptoMail send failed: Invalid email address',
         },
       });
 
       const failed = await prisma.email.findUnique({where: {id: email.id}});
       expect(failed?.status).toBe(EmailStatus.FAILED);
-      expect(failed?.error).toContain('SES send failed');
+      expect(failed?.error).toContain('ZeptoMail send failed');
     });
   });
 

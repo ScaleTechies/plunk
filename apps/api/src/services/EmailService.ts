@@ -417,6 +417,7 @@ export class EmailService {
         attachments: attachments,
         tracking: shouldTrack,
         clientReference: email.id,
+        projectId: email.projectId,
       });
 
       // Mark as sent with provider message ID
