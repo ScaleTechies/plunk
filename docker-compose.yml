@@ -1,7 +1,6 @@
-version: '3.8'
-
 # Plunk Self-Hosting Docker Compose
-# This setup runs all Plunk services in a single container with nginx reverse proxy
+# This setup builds this fork and runs all Plunk services in a single container
+# with nginx reverse proxy.
 #
 # Uses subdomain-based routing:
 #   - api.example.com -> API Server
@@ -29,7 +28,6 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: plunk-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: plunk
@@ -47,7 +45,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: plunk-redis
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
@@ -62,7 +59,6 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: plunk-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -84,7 +80,6 @@ services:
 
   ntfy:
     image: binwiederhier/ntfy:latest
-    container_name: plunk-ntfy
     restart: unless-stopped
     command: serve
     environment:
@@ -109,8 +104,9 @@ services:
   # ============================================
 
   plunk:
-    image: ghcr.io/useplunk/plunk:latest
-    container_name: plunk
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       # Service mode
@@ -219,6 +215,10 @@ services:
       # - "3000:3000"  # Web
       # - "4000:4000"  # Landing
       # - "1000:1000"  # Wiki
+
+    expose:
+      # Internal HTTP port for Coolify's reverse proxy.
+      - "80"
 
     depends_on:
       postgres:
