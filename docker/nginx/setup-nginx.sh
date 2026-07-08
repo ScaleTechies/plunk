@@ -22,6 +22,17 @@ url_host() {
     clean_url "$1" | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##'
 }
 
+is_localhost_value() {
+    case "$1" in
+        ""|localhost|*.localhost|http://localhost*|https://localhost*|http://*.localhost*|https://*.localhost*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 first_non_empty() {
     for value in "$@"; do
         if [ -n "$value" ]; then
@@ -48,16 +59,16 @@ export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-app.localhost}"
 export LANDING_DOMAIN="${LANDING_DOMAIN:-www.localhost}"
 export WIKI_DOMAIN="${WIKI_DOMAIN:-docs.localhost}"
 
-if [ -n "$COOLIFY_API_URI" ] && [ "$API_DOMAIN" = "api.localhost" ]; then
+if [ -n "$COOLIFY_API_URI" ] && is_localhost_value "$API_DOMAIN"; then
     export API_DOMAIN="$(url_host "$COOLIFY_API_URI")"
 fi
-if [ -n "$COOLIFY_DASHBOARD_URI" ] && [ "$DASHBOARD_DOMAIN" = "app.localhost" ]; then
+if [ -n "$COOLIFY_DASHBOARD_URI" ] && is_localhost_value "$DASHBOARD_DOMAIN"; then
     export DASHBOARD_DOMAIN="$(url_host "$COOLIFY_DASHBOARD_URI")"
 fi
-if [ -n "$COOLIFY_LANDING_URI" ] && [ "$LANDING_DOMAIN" = "www.localhost" ]; then
+if [ -n "$COOLIFY_LANDING_URI" ] && is_localhost_value "$LANDING_DOMAIN"; then
     export LANDING_DOMAIN="$(url_host "$COOLIFY_LANDING_URI")"
 fi
-if [ -n "$COOLIFY_WIKI_URI" ] && [ "$WIKI_DOMAIN" = "docs.localhost" ]; then
+if [ -n "$COOLIFY_WIKI_URI" ] && is_localhost_value "$WIKI_DOMAIN"; then
     export WIKI_DOMAIN="$(url_host "$COOLIFY_WIKI_URI")"
 fi
 export SMTP_DOMAIN="${SMTP_DOMAIN:-smtp.localhost}"
@@ -89,6 +100,19 @@ export API_URI="${API_URI:-${PROTOCOL}://${API_DOMAIN}}"
 export DASHBOARD_URI="${DASHBOARD_URI:-${PROTOCOL}://${DASHBOARD_DOMAIN}}"
 export LANDING_URI="${LANDING_URI:-${PROTOCOL}://${LANDING_DOMAIN}}"
 export WIKI_URI="${WIKI_URI:-${PROTOCOL}://${WIKI_DOMAIN}}"
+
+if [ -n "$COOLIFY_API_URI" ] && is_localhost_value "$API_URI"; then
+    export API_URI="$COOLIFY_API_URI"
+fi
+if [ -n "$COOLIFY_DASHBOARD_URI" ] && is_localhost_value "$DASHBOARD_URI"; then
+    export DASHBOARD_URI="$COOLIFY_DASHBOARD_URI"
+fi
+if [ -n "$COOLIFY_LANDING_URI" ] && is_localhost_value "$LANDING_URI"; then
+    export LANDING_URI="$COOLIFY_LANDING_URI"
+fi
+if [ -n "$COOLIFY_WIKI_URI" ] && is_localhost_value "$WIKI_URI"; then
+    export WIKI_URI="$COOLIFY_WIKI_URI"
+fi
 
 # Generate nginx configuration from template
 echo "📝 Generating nginx configuration..."

@@ -138,6 +138,13 @@ services:
       SERVICE_URL_WIKI_80: ${SERVICE_URL_WIKI_80}
       USE_HTTPS: "true"
 
+      # Public application URLs. These are consumed by the API and frontend
+      # runtime replacement; keep the portless Coolify URLs here.
+      API_URI: ${SERVICE_URL_API}
+      DASHBOARD_URI: ${SERVICE_URL_DASHBOARD}
+      LANDING_URI: ${SERVICE_URL_LANDING}
+      WIKI_URI: ${SERVICE_URL_WIKI}
+
       # ZeptoMail fallback (project-level credentials are preferred)
       ZEPTOMAIL_SEND_TOKEN: ${ZEPTOMAIL_SEND_TOKEN:-}
       ZEPTOMAIL_API_URL: ${ZEPTOMAIL_API_URL:-https://api.zeptomail.com/v1.1/email}
