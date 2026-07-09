@@ -42,6 +42,38 @@ first_non_empty() {
     done
 }
 
+infer_smtp_from_domain() {
+    domain="$1"
+
+    case "$domain" in
+        api.*) printf 'smtp.%s' "${domain#api.}" ;;
+        dashboard.*) printf 'smtp.%s' "${domain#dashboard.}" ;;
+        app.*) printf 'smtp.%s' "${domain#app.}" ;;
+        landing.*) printf 'smtp.%s' "${domain#landing.}" ;;
+        www.*) printf 'smtp.%s' "${domain#www.}" ;;
+        wiki.*) printf 'smtp.%s' "${domain#wiki.}" ;;
+        docs.*) printf 'smtp.%s' "${domain#docs.}" ;;
+        api-*) printf 'smtp-%s' "${domain#api-}" ;;
+        dashboard-*) printf 'smtp-%s' "${domain#dashboard-}" ;;
+        app-*) printf 'smtp-%s' "${domain#app-}" ;;
+        landing-*) printf 'smtp-%s' "${domain#landing-}" ;;
+        wiki-*) printf 'smtp-%s' "${domain#wiki-}" ;;
+        docs-*) printf 'smtp-%s' "${domain#docs-}" ;;
+    esac
+}
+
+infer_smtp_domain() {
+    for domain in "$@"; do
+        if [ -n "$domain" ] && ! is_localhost_value "$domain"; then
+            inferred="$(infer_smtp_from_domain "$domain")"
+            if [ -n "$inferred" ]; then
+                printf '%s' "$inferred"
+                return
+            fi
+        fi
+    done
+}
+
 # Prefer Coolify's clean SERVICE_URL_* values. SERVICE_URL_*_80 is still
 # accepted as a fallback because it is what creates the port-80 service mapping.
 COOLIFY_API_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_API" "$SERVICE_URL_API_80")")"
@@ -49,29 +81,6 @@ COOLIFY_DASHBOARD_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_DASHBOARD" "
 COOLIFY_LANDING_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_LANDING" "$SERVICE_URL_LANDING_80")")"
 COOLIFY_WIKI_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_WIKI" "$SERVICE_URL_WIKI_80")")"
 
-# Set defaults if not provided
-export API_DOMAIN="${API_DOMAIN:-$(url_host "$COOLIFY_API_URI")}"
-export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-$(url_host "$COOLIFY_DASHBOARD_URI")}"
-export LANDING_DOMAIN="${LANDING_DOMAIN:-$(url_host "$COOLIFY_LANDING_URI")}"
-export WIKI_DOMAIN="${WIKI_DOMAIN:-$(url_host "$COOLIFY_WIKI_URI")}"
-export API_DOMAIN="${API_DOMAIN:-api.localhost}"
-export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-app.localhost}"
-export LANDING_DOMAIN="${LANDING_DOMAIN:-www.localhost}"
-export WIKI_DOMAIN="${WIKI_DOMAIN:-docs.localhost}"
-
-if [ -n "$COOLIFY_API_URI" ] && is_localhost_value "$API_DOMAIN"; then
-    export API_DOMAIN="$(url_host "$COOLIFY_API_URI")"
-fi
-if [ -n "$COOLIFY_DASHBOARD_URI" ] && is_localhost_value "$DASHBOARD_DOMAIN"; then
-    export DASHBOARD_DOMAIN="$(url_host "$COOLIFY_DASHBOARD_URI")"
-fi
-if [ -n "$COOLIFY_LANDING_URI" ] && is_localhost_value "$LANDING_DOMAIN"; then
-    export LANDING_DOMAIN="$(url_host "$COOLIFY_LANDING_URI")"
-fi
-if [ -n "$COOLIFY_WIKI_URI" ] && is_localhost_value "$WIKI_DOMAIN"; then
-    export WIKI_DOMAIN="$(url_host "$COOLIFY_WIKI_URI")"
-fi
-export SMTP_DOMAIN="${SMTP_DOMAIN:-smtp.localhost}"
 export NGINX_PORT="${NGINX_PORT:-80}"
 export USE_HTTPS="${USE_HTTPS:-false}"
 
@@ -82,24 +91,12 @@ else
     PROTOCOL="http"
 fi
 
-# Validate required environment variables
-if [ -z "$API_DOMAIN" ] || [ -z "$DASHBOARD_DOMAIN" ] || [ -z "$LANDING_DOMAIN" ]; then
-    echo "⚠️  Warning: Some domain variables are not set. Using defaults."
-    echo "   API_DOMAIN=${API_DOMAIN}"
-    echo "   DASHBOARD_DOMAIN=${DASHBOARD_DOMAIN}"
-    echo "   LANDING_DOMAIN=${LANDING_DOMAIN}"
-    echo "   WIKI_DOMAIN=${WIKI_DOMAIN}"
-fi
-
-# Auto-configure API URIs based on domains and protocol
+# Resolve public URLs. Explicit API_URI/DASHBOARD_URI/etc. are used for custom
+# domains; Coolify-generated SERVICE_URL_* values are fallback defaults.
 export API_URI="${API_URI:-${COOLIFY_API_URI}}"
 export DASHBOARD_URI="${DASHBOARD_URI:-${COOLIFY_DASHBOARD_URI}}"
 export LANDING_URI="${LANDING_URI:-${COOLIFY_LANDING_URI}}"
 export WIKI_URI="${WIKI_URI:-${COOLIFY_WIKI_URI}}"
-export API_URI="${API_URI:-${PROTOCOL}://${API_DOMAIN}}"
-export DASHBOARD_URI="${DASHBOARD_URI:-${PROTOCOL}://${DASHBOARD_DOMAIN}}"
-export LANDING_URI="${LANDING_URI:-${PROTOCOL}://${LANDING_DOMAIN}}"
-export WIKI_URI="${WIKI_URI:-${PROTOCOL}://${WIKI_DOMAIN}}"
 
 if [ -n "$COOLIFY_API_URI" ] && is_localhost_value "$API_URI"; then
     export API_URI="$COOLIFY_API_URI"
@@ -114,16 +111,62 @@ if [ -n "$COOLIFY_WIKI_URI" ] && is_localhost_value "$WIKI_URI"; then
     export WIKI_URI="$COOLIFY_WIKI_URI"
 fi
 
+# Resolve nginx server names from explicit domain vars or from the final URLs.
+export API_DOMAIN="${API_DOMAIN:-$(url_host "$API_URI")}"
+export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-$(url_host "$DASHBOARD_URI")}"
+export LANDING_DOMAIN="${LANDING_DOMAIN:-$(url_host "$LANDING_URI")}"
+export WIKI_DOMAIN="${WIKI_DOMAIN:-$(url_host "$WIKI_URI")}"
+export API_DOMAIN="${API_DOMAIN:-api.localhost}"
+export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-app.localhost}"
+export LANDING_DOMAIN="${LANDING_DOMAIN:-www.localhost}"
+export WIKI_DOMAIN="${WIKI_DOMAIN:-docs.localhost}"
+
+if [ -n "$API_URI" ] && is_localhost_value "$API_DOMAIN" && ! is_localhost_value "$API_URI"; then
+    export API_DOMAIN="$(url_host "$API_URI")"
+fi
+if [ -n "$DASHBOARD_URI" ] && is_localhost_value "$DASHBOARD_DOMAIN" && ! is_localhost_value "$DASHBOARD_URI"; then
+    export DASHBOARD_DOMAIN="$(url_host "$DASHBOARD_URI")"
+fi
+if [ -n "$LANDING_URI" ] && is_localhost_value "$LANDING_DOMAIN" && ! is_localhost_value "$LANDING_URI"; then
+    export LANDING_DOMAIN="$(url_host "$LANDING_URI")"
+fi
+if [ -n "$WIKI_URI" ] && is_localhost_value "$WIKI_DOMAIN" && ! is_localhost_value "$WIKI_URI"; then
+    export WIKI_DOMAIN="$(url_host "$WIKI_URI")"
+fi
+
+# Local fallback URLs.
+export API_URI="${API_URI:-${PROTOCOL}://${API_DOMAIN}}"
+export DASHBOARD_URI="${DASHBOARD_URI:-${PROTOCOL}://${DASHBOARD_DOMAIN}}"
+export LANDING_URI="${LANDING_URI:-${PROTOCOL}://${LANDING_DOMAIN}}"
+export WIKI_URI="${WIKI_URI:-${PROTOCOL}://${WIKI_DOMAIN}}"
+
+# SMTP is TCP, not a Coolify HTTP route. Set SMTP_DOMAIN explicitly when the
+# relay should use a different hostname than the inferred one.
+export SMTP_DOMAIN="${SMTP_DOMAIN:-}"
+if is_localhost_value "$SMTP_DOMAIN"; then
+    export SMTP_DOMAIN=""
+fi
+export SMTP_DOMAIN="${SMTP_DOMAIN:-$(infer_smtp_domain "$API_DOMAIN" "$DASHBOARD_DOMAIN" "$LANDING_DOMAIN" "$WIKI_DOMAIN")}"
+export NGINX_SMTP_DOMAIN="${SMTP_DOMAIN:-_}"
+
+# Validate required environment variables
+if [ -z "$API_DOMAIN" ] || [ -z "$DASHBOARD_DOMAIN" ] || [ -z "$LANDING_DOMAIN" ]; then
+    echo "⚠️  Warning: Some domain variables are not set. Using defaults."
+    echo "   API_DOMAIN=${API_DOMAIN}"
+    echo "   DASHBOARD_DOMAIN=${DASHBOARD_DOMAIN}"
+    echo "   LANDING_DOMAIN=${LANDING_DOMAIN}"
+    echo "   WIKI_DOMAIN=${WIKI_DOMAIN}"
+fi
+
 # Generate nginx configuration from template
 echo "📝 Generating nginx configuration..."
 
-# If SMTP_DOMAIN is not set or empty, use a placeholder to prevent nginx config errors
-if [ -z "$SMTP_DOMAIN" ]; then
+# If SMTP_DOMAIN is not set, use a placeholder to prevent nginx config errors.
+if [ "$NGINX_SMTP_DOMAIN" = "_" ]; then
     echo "⚠️  SMTP_DOMAIN not set - ACME challenge proxy will not be configured"
-    export SMTP_DOMAIN="_"  # nginx wildcard that won't match any real domain
 fi
 
-envsubst '${NGINX_PORT} ${API_DOMAIN} ${DASHBOARD_DOMAIN} ${LANDING_DOMAIN} ${WIKI_DOMAIN} ${SMTP_DOMAIN}' \
+envsubst '${NGINX_PORT} ${API_DOMAIN} ${DASHBOARD_DOMAIN} ${LANDING_DOMAIN} ${WIKI_DOMAIN} ${NGINX_SMTP_DOMAIN}' \
     < /app/docker/nginx/nginx.conf.template \
     > "${NGINX_CONF_D}/plunk.conf"
 
@@ -171,4 +214,4 @@ echo "   API Domain: ${API_DOMAIN}"
 echo "   Dashboard Domain: ${DASHBOARD_DOMAIN}"
 echo "   Landing Domain: ${LANDING_DOMAIN}"
 echo "   Wiki Domain: ${WIKI_DOMAIN}"
-echo "   SMTP Domain: ${SMTP_DOMAIN}"
+echo "   SMTP Domain: ${SMTP_DOMAIN:-not configured}"

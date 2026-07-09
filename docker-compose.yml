@@ -126,12 +126,12 @@ services:
       SERVICE_URL_WIKI: ${SERVICE_URL_WIKI}
       USE_HTTPS: "true"
 
-      # Public application URLs. These are consumed by the API and frontend
-      # runtime replacement; keep the portless Coolify URLs here.
-      API_URI: ${SERVICE_URL_API}
-      DASHBOARD_URI: ${SERVICE_URL_DASHBOARD}
-      LANDING_URI: ${SERVICE_URL_LANDING}
-      WIKI_URI: ${SERVICE_URL_WIKI}
+      # Public application URLs. Set these in Coolify when using custom
+      # domains. If left empty, startup falls back to SERVICE_URL_*.
+      API_URI: ${API_URI:-}
+      DASHBOARD_URI: ${DASHBOARD_URI:-}
+      LANDING_URI: ${LANDING_URI:-}
+      WIKI_URI: ${WIKI_URI:-}
 
       # ZeptoMail fallback (project-level credentials are preferred)
       ZEPTOMAIL_SEND_TOKEN: ${ZEPTOMAIL_SEND_TOKEN:-}
@@ -165,8 +165,8 @@ services:
       NTFY_URL: ${NTFY_URL:-http://ntfy/plunk-notifications}
 
       # SMTP Server (for sending emails via SMTP)
-      # SMTP_DOMAIN is required to select the correct certificate from Traefik acme.json
-      # If using PEM files, SMTP_DOMAIN is optional
+      # Optional override. When empty, startup infers smtp.* / smtp-* from the
+      # configured API/dashboard/landing/wiki domains.
       SMTP_DOMAIN: ${SMTP_DOMAIN:-}
 
       # Platform emails

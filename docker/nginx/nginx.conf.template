@@ -147,7 +147,7 @@ server {
 # This proxies Let's Encrypt ACME HTTP-01 challenges to the SMTP server's challenge handler
 server {
     listen ${NGINX_PORT};
-    server_name ${SMTP_DOMAIN};
+    server_name ${NGINX_SMTP_DOMAIN};
 
     # Proxy ACME challenges to SMTP server's internal challenge server
     location /.well-known/acme-challenge/ {
