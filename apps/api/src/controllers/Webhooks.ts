@@ -188,13 +188,28 @@ export class Webhooks {
     return false;
   }
 
-  private getZeptoMailEmailInfo(payload: Record<string, unknown>) {
-    const eventMessage = payload.event_message;
-    if (!eventMessage || typeof eventMessage !== 'object') {
+  private getFirstRecord(value: unknown): Record<string, unknown> {
+    const candidate = Array.isArray(value) ? value[0] : value;
+
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
       return {};
     }
 
-    const emailInfo = (eventMessage as Record<string, unknown>).email_info;
+    return candidate as Record<string, unknown>;
+  }
+
+  private getFirstString(value: unknown): string | undefined {
+    const candidate = Array.isArray(value) ? value[0] : value;
+    return typeof candidate === 'string' ? candidate : undefined;
+  }
+
+  private getZeptoMailEventMessage(payload: Record<string, unknown>) {
+    return this.getFirstRecord(payload.event_message);
+  }
+
+  private getZeptoMailEmailInfo(payload: Record<string, unknown>) {
+    const eventMessage = this.getZeptoMailEventMessage(payload);
+    const emailInfo = eventMessage.email_info;
     if (!emailInfo || typeof emailInfo !== 'object') {
       return {};
     }
@@ -202,9 +217,42 @@ export class Webhooks {
     return emailInfo as Record<string, unknown>;
   }
 
+  private parseZeptoMailDate(value: unknown): Date | null {
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      return null;
+    }
+
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  private getZeptoMailEventDate(payload: Record<string, unknown>): Date {
+    const eventMessage = this.getZeptoMailEventMessage(payload);
+    const emailInfo = this.getZeptoMailEmailInfo(payload);
+    const eventData = this.getFirstRecord(eventMessage.event_data);
+    const details = this.getFirstRecord(eventData.details);
+
+    const candidates = [
+      details.time,
+      details.modified_time,
+      emailInfo.processed_time,
+      eventMessage.processed_time,
+      payload.processed_time,
+    ];
+
+    for (const candidate of candidates) {
+      const date = this.parseZeptoMailDate(candidate);
+      if (date) {
+        return date;
+      }
+    }
+
+    return new Date();
+  }
+
   private async findEmailForZeptoMailPayload(payload: Record<string, unknown>) {
     const emailInfo = this.getZeptoMailEmailInfo(payload);
-    const eventMessage = (payload.event_message as Record<string, unknown> | undefined) ?? {};
+    const eventMessage = this.getZeptoMailEventMessage(payload);
     const clientReference = typeof emailInfo.client_reference === 'string' ? emailInfo.client_reference : undefined;
     const emailReference = typeof emailInfo.email_reference === 'string' ? emailInfo.email_reference : undefined;
     const requestId =
@@ -241,6 +289,9 @@ export class Webhooks {
     if (normalized.includes('click')) return 'click';
     if (normalized.includes('hard') && normalized.includes('bounce')) return 'hard_bounce';
     if (normalized.includes('soft') && normalized.includes('bounce')) return 'soft_bounce';
+    if (normalized.includes('fbl') && (normalized.includes('complaint') || normalized.includes('compliant'))) {
+      return 'complaint';
+    }
     if (normalized.includes('feedback') || normalized.includes('complaint')) return 'complaint';
     if (normalized.includes('failed') || normalized.includes('reject')) return 'failed';
 
@@ -277,7 +328,7 @@ export class Webhooks {
       }
 
       const payload = JSON.parse(signedPayload) as Record<string, unknown>;
-      const eventName = typeof payload.event_name === 'string' ? payload.event_name : '';
+      const eventName = this.getFirstString(payload.event_name) ?? '';
       const eventType = this.getZeptoMailEventType(eventName);
 
       if (eventType === 'unknown') {
@@ -296,7 +347,7 @@ export class Webhooks {
         return res.status(404).json({success: false, error: 'Email not found'});
       }
 
-      const now = new Date();
+      const eventDate = this.getZeptoMailEventDate(payload);
       const updateData: Prisma.EmailUpdateInput = {};
       let plunkEventName = 'email.event';
       const eventData: Record<string, unknown> = {
@@ -311,46 +362,47 @@ export class Webhooks {
         campaignId: email.campaignId,
         sourceType: email.sourceType,
         payload,
+        occurredAt: eventDate.toISOString(),
       };
 
       switch (eventType) {
         case 'delivered':
           updateData.status = EmailStatus.DELIVERED;
-          updateData.deliveredAt = now;
+          updateData.deliveredAt = eventDate;
           plunkEventName = 'email.delivery';
-          eventData.deliveredAt = now.toISOString();
+          eventData.deliveredAt = eventDate.toISOString();
           break;
 
         case 'open':
           if (!email.openedAt) {
-            updateData.openedAt = now;
+            updateData.openedAt = eventDate;
           }
           updateData.opens = (email.opens || 0) + 1;
           updateData.status = EmailStatus.OPENED;
           plunkEventName = 'email.open';
-          eventData.openedAt = email.openedAt?.toISOString() || now.toISOString();
+          eventData.openedAt = email.openedAt?.toISOString() || eventDate.toISOString();
           eventData.opens = (email.opens || 0) + 1;
           eventData.isFirstOpen = !email.openedAt;
           break;
 
         case 'click':
           if (!email.clickedAt) {
-            updateData.clickedAt = now;
+            updateData.clickedAt = eventDate;
           }
           updateData.clicks = (email.clicks || 0) + 1;
           updateData.status = EmailStatus.CLICKED;
           plunkEventName = 'email.click';
-          eventData.clickedAt = email.clickedAt?.toISOString() || now.toISOString();
+          eventData.clickedAt = email.clickedAt?.toISOString() || eventDate.toISOString();
           eventData.clicks = (email.clicks || 0) + 1;
           eventData.isFirstClick = !email.clickedAt;
           break;
 
         case 'hard_bounce':
           updateData.status = EmailStatus.BOUNCED;
-          updateData.bouncedAt = now;
+          updateData.bouncedAt = eventDate;
           plunkEventName = 'email.bounce';
           eventData.bounceType = 'hard';
-          eventData.bouncedAt = now.toISOString();
+          eventData.bouncedAt = eventDate.toISOString();
           await prisma.contact.update({
             where: {id: email.contactId},
             data: {subscribed: false},
@@ -361,14 +413,15 @@ export class Webhooks {
         case 'soft_bounce':
           plunkEventName = 'email.bounce';
           eventData.bounceType = 'soft';
+          eventData.bouncedAt = eventDate.toISOString();
           eventData.transientBounce = true;
           break;
 
         case 'complaint':
           updateData.status = EmailStatus.COMPLAINED;
-          updateData.complainedAt = now;
+          updateData.complainedAt = eventDate;
           plunkEventName = 'email.complaint';
-          eventData.complainedAt = now.toISOString();
+          eventData.complainedAt = eventDate.toISOString();
           await prisma.contact.update({
             where: {id: email.contactId},
             data: {subscribed: false},

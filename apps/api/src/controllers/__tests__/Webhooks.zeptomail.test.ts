@@ -94,6 +94,39 @@ function zeptoPayload(eventName: string, emailId: string) {
   };
 }
 
+function zeptoArrayPayload(eventName: string, emailId: string, eventTime = '2026-07-09T17:07:52Z') {
+  return {
+    event_name: [eventName],
+    event_message: [
+      {
+        email_info: {
+          client_reference: emailId,
+          email_reference: 'zepto-email-ref',
+          subject: 'webhook test email',
+          processed_time: '2026-07-09T17:00:00Z',
+          object: 'email',
+        },
+        event_data: [
+          {
+            details: [
+              {
+                reason: 'relaying-issues',
+                bounced_recipient: 'bouncerecipient@zylker.com',
+                time: eventTime,
+                diagnostic_message: 'bad-mailbox',
+              },
+            ],
+            object: eventName,
+          },
+        ],
+        request_id: 'zepto-request-id',
+      },
+    ],
+    mailagent_key: 'zepto-agent-key',
+    webhook_request_id: 'webhook-request-id',
+  };
+}
+
 describe('ZeptoMail webhooks', () => {
   const prisma = getPrismaClient();
   const controller = new Webhooks();
@@ -199,6 +232,86 @@ describe('ZeptoMail webhooks', () => {
       where: {emailId: email.id, name: 'email.bounce'},
     });
     expect(event).not.toBeNull();
+  });
+
+  it('handles ZeptoMail array-form softbounce payloads with provider event timestamps', async () => {
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
+    const contact = await factories.createContact({projectId: project.id, subscribed: true});
+    const email = await factories.createEmail(project.id, contact.id, {
+      status: EmailStatus.SENT,
+      messageId: 'zepto-request-id',
+    });
+
+    const payload = zeptoArrayPayload('softbounce', email.id, '2026-07-09T15:46:30Z');
+    const res = makeRes();
+
+    await controller.receiveZeptoMailProjectWebhook(makeReq(payload, project.id), res);
+
+    expect(res.statusCode).toBe(200);
+
+    const updatedEmail = await prisma.email.findUnique({where: {id: email.id}});
+    expect(updatedEmail?.status).toBe(EmailStatus.SENT);
+
+    const updatedContact = await prisma.contact.findUnique({where: {id: contact.id}});
+    expect(updatedContact?.subscribed).toBe(true);
+
+    const event = await prisma.event.findFirst({
+      where: {emailId: email.id, name: 'email.bounce'},
+    });
+    expect(event?.data).toMatchObject({
+      provider: 'zeptomail',
+      providerEvent: 'softbounce',
+      bounceType: 'soft',
+      bouncedAt: '2026-07-09T15:46:30.000Z',
+      occurredAt: '2026-07-09T15:46:30.000Z',
+      transientBounce: true,
+    });
+  });
+
+  it('handles ZeptoMail array-form hardbounce payloads and stores provider timestamps', async () => {
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
+    const contact = await factories.createContact({projectId: project.id, subscribed: true});
+    const email = await factories.createEmail(project.id, contact.id, {
+      status: EmailStatus.SENT,
+      messageId: 'zepto-request-id',
+    });
+
+    const payload = zeptoArrayPayload('hardbounce', email.id, '2026-07-09T17:07:52Z');
+    const res = makeRes();
+
+    await controller.receiveZeptoMailProjectWebhook(makeReq(payload, project.id), res);
+
+    expect(res.statusCode).toBe(200);
+
+    const updatedEmail = await prisma.email.findUnique({where: {id: email.id}});
+    expect(updatedEmail?.status).toBe(EmailStatus.BOUNCED);
+    expect(updatedEmail?.bouncedAt?.toISOString()).toBe('2026-07-09T17:07:52.000Z');
+
+    const updatedContact = await prisma.contact.findUnique({where: {id: contact.id}});
+    expect(updatedContact?.subscribed).toBe(false);
+  });
+
+  it('handles ZeptoMail feedback loop payloads as complaints', async () => {
+    const {project} = await factories.createUserWithProject({}, {zeptomailWebhookAuthKey: 'webhook-secret'});
+    const contact = await factories.createContact({projectId: project.id, subscribed: true});
+    const email = await factories.createEmail(project.id, contact.id, {
+      status: EmailStatus.SENT,
+      messageId: 'zepto-request-id',
+    });
+
+    const payload = zeptoArrayPayload('fbl_compliant', email.id, '2026-07-09T17:08:07Z');
+    const res = makeRes();
+
+    await controller.receiveZeptoMailProjectWebhook(makeReq(payload, project.id), res);
+
+    expect(res.statusCode).toBe(200);
+
+    const updatedEmail = await prisma.email.findUnique({where: {id: email.id}});
+    expect(updatedEmail?.status).toBe(EmailStatus.COMPLAINED);
+    expect(updatedEmail?.complainedAt?.toISOString()).toBe('2026-07-09T17:08:07.000Z');
+
+    const updatedContact = await prisma.contact.findUnique({where: {id: contact.id}});
+    expect(updatedContact?.subscribed).toBe(false);
   });
 
   it('rejects project-scoped webhooks without a configured project webhook key', async () => {

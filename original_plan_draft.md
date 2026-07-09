@@ -1058,6 +1058,46 @@ Implementation notes:
 
 This probably requires adding route-specific raw body handling in `apps/api/src/app.ts`, similar to Stripe's raw body handling.
 
+### 24.6.1 Implementation correction: project-scoped ZeptoMail configuration
+
+The implementation should treat ZeptoMail sending and inbound provider webhooks as project-scoped configuration, not only process-wide environment configuration.
+
+Primary project-level fields:
+
+```text
+zeptomailSendToken
+zeptomailAgentAlias
+zeptomailSenderAddress
+zeptomailWebhookAuthKey
+zeptomailWebhookHeaderKey
+zeptomailWebhookHeaderValue
+```
+
+Behavioral notes:
+
+- `zeptomailSendToken` is the per-project ZeptoMail authorization token used for sending.
+- `zeptomailSenderAddress` is enforced per project. When set, the project can only send from that exact address.
+- `zeptomailAgentAlias` is stored for operator/admin mapping to the matching ZeptoMail Mail Agent, but it is not sent to ZeptoMail's `/v1.1/email` API.
+- `ZEPTOMAIL_SEND_TOKEN` remains useful only as a legacy/global fallback. Project-scoped tokens are preferred.
+- `ZEPTOMAIL_WEBHOOK_AUTH_KEY` remains useful only as a legacy/global fallback for `/webhooks/zeptomail`. Project-scoped webhook auth is preferred.
+- `ZEPTOMAIL_DEFAULT_FROM_DOMAIN` is obsolete for this implementation and should not be treated as a required env var.
+
+Webhook auth correction:
+
+ZeptoMail has two relevant webhook-auth paths for this fork:
+
+1. `producer-signature` HMAC validation using the ZeptoMail webhook authentication key.
+2. ZeptoMail UI "Authorization headers" validation using a key/value pair configured in ZeptoMail and stored per project as `zeptomailWebhookHeaderKey` and `zeptomailWebhookHeaderValue`.
+
+The app should support both because ZeptoMail's webhook UI exposes authorization headers as key/value fields. The dashboard should surface:
+
+- the webhook URL for the project/Mail Agent,
+- the authorization header key to copy into ZeptoMail,
+- the authorization header value to copy into ZeptoMail,
+- whether sensitive values are already configured without returning those secrets to the browser.
+
+Webhook keys are effectively ZeptoMail Mail-Agent scoped, so they should be project scoped in Plunk when each project maps to its own ZeptoMail Mail Agent.
+
 ### 24.7 Env and Docker correction
 
 The app currently hard-requires:
