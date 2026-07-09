@@ -30,14 +30,8 @@ resolve_uri() {
 }
 
 resolve_domain() {
-    explicit_domain="$1"
-    uri="$2"
-    fallback_domain="$3"
-
-    if [ -n "$explicit_domain" ] && ! is_localhost_value "$explicit_domain"; then
-        url_host "$explicit_domain"
-        return
-    fi
+    uri="$1"
+    fallback_domain="$2"
 
     resolved_domain="$(url_host "$uri")"
     printf '%s' "${resolved_domain:-$fallback_domain}"
@@ -103,11 +97,12 @@ export DASHBOARD_URI="$(resolve_uri "$DASHBOARD_URI" "app.localhost")"
 export LANDING_URI="$(resolve_uri "$LANDING_URI" "www.localhost")"
 export WIKI_URI="$(resolve_uri "$WIKI_URI" "docs.localhost")"
 
-# Resolve nginx server names from explicit domain vars or from the final URLs.
-export API_DOMAIN="$(resolve_domain "$API_DOMAIN" "$API_URI" "api.localhost")"
-export DASHBOARD_DOMAIN="$(resolve_domain "$DASHBOARD_DOMAIN" "$DASHBOARD_URI" "app.localhost")"
-export LANDING_DOMAIN="$(resolve_domain "$LANDING_DOMAIN" "$LANDING_URI" "www.localhost")"
-export WIKI_DOMAIN="$(resolve_domain "$WIKI_DOMAIN" "$WIKI_URI" "docs.localhost")"
+# Resolve nginx server names from the final URLs. Domain env vars are
+# intentionally ignored so stale Coolify variables cannot override *_URI.
+export API_DOMAIN="$(resolve_domain "$API_URI" "api.localhost")"
+export DASHBOARD_DOMAIN="$(resolve_domain "$DASHBOARD_URI" "app.localhost")"
+export LANDING_DOMAIN="$(resolve_domain "$LANDING_URI" "www.localhost")"
+export WIKI_DOMAIN="$(resolve_domain "$WIKI_URI" "docs.localhost")"
 
 # SMTP is TCP, not a Coolify HTTP route. Set SMTP_DOMAIN explicitly when the
 # relay should use a different hostname than the inferred one.
