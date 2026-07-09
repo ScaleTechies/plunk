@@ -22,6 +22,27 @@ url_host() {
     clean_url "$1" | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##'
 }
 
+resolve_uri() {
+    value="$1"
+    fallback_host="$2"
+
+    clean_url "${value:-${PROTOCOL}://${fallback_host}}"
+}
+
+resolve_domain() {
+    explicit_domain="$1"
+    uri="$2"
+    fallback_domain="$3"
+
+    if [ -n "$explicit_domain" ] && ! is_localhost_value "$explicit_domain"; then
+        url_host "$explicit_domain"
+        return
+    fi
+
+    resolved_domain="$(url_host "$uri")"
+    printf '%s' "${resolved_domain:-$fallback_domain}"
+}
+
 is_localhost_value() {
     case "$1" in
         ""|localhost|*.localhost|http://localhost*|https://localhost*|http://*.localhost*|https://*.localhost*)
@@ -31,15 +52,6 @@ is_localhost_value() {
             return 1
             ;;
     esac
-}
-
-first_non_empty() {
-    for value in "$@"; do
-        if [ -n "$value" ]; then
-            printf '%s' "$value"
-            return
-        fi
-    done
 }
 
 infer_smtp_from_domain() {
@@ -74,13 +86,6 @@ infer_smtp_domain() {
     done
 }
 
-# Prefer Coolify's clean SERVICE_URL_* values. SERVICE_URL_*_80 is still
-# accepted as a fallback because it is what creates the port-80 service mapping.
-COOLIFY_API_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_API" "$SERVICE_URL_API_80")")"
-COOLIFY_DASHBOARD_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_DASHBOARD" "$SERVICE_URL_DASHBOARD_80")")"
-COOLIFY_LANDING_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_LANDING" "$SERVICE_URL_LANDING_80")")"
-COOLIFY_WIKI_URI="$(clean_url "$(first_non_empty "$SERVICE_URL_WIKI" "$SERVICE_URL_WIKI_80")")"
-
 export NGINX_PORT="${NGINX_PORT:-80}"
 export USE_HTTPS="${USE_HTTPS:-false}"
 
@@ -91,54 +96,18 @@ else
     PROTOCOL="http"
 fi
 
-# Resolve public URLs. Explicit API_URI/DASHBOARD_URI/etc. are used for custom
-# domains; Coolify-generated SERVICE_URL_* values are fallback defaults.
-export API_URI="${API_URI:-${COOLIFY_API_URI}}"
-export DASHBOARD_URI="${DASHBOARD_URI:-${COOLIFY_DASHBOARD_URI}}"
-export LANDING_URI="${LANDING_URI:-${COOLIFY_LANDING_URI}}"
-export WIKI_URI="${WIKI_URI:-${COOLIFY_WIKI_URI}}"
-
-if [ -n "$COOLIFY_API_URI" ] && is_localhost_value "$API_URI"; then
-    export API_URI="$COOLIFY_API_URI"
-fi
-if [ -n "$COOLIFY_DASHBOARD_URI" ] && is_localhost_value "$DASHBOARD_URI"; then
-    export DASHBOARD_URI="$COOLIFY_DASHBOARD_URI"
-fi
-if [ -n "$COOLIFY_LANDING_URI" ] && is_localhost_value "$LANDING_URI"; then
-    export LANDING_URI="$COOLIFY_LANDING_URI"
-fi
-if [ -n "$COOLIFY_WIKI_URI" ] && is_localhost_value "$WIKI_URI"; then
-    export WIKI_URI="$COOLIFY_WIKI_URI"
-fi
+# Resolve public URLs. Coolify deployments must provide these explicitly via
+# docker-compose.yml; localhost defaults only support direct local runs.
+export API_URI="$(resolve_uri "$API_URI" "api.localhost")"
+export DASHBOARD_URI="$(resolve_uri "$DASHBOARD_URI" "app.localhost")"
+export LANDING_URI="$(resolve_uri "$LANDING_URI" "www.localhost")"
+export WIKI_URI="$(resolve_uri "$WIKI_URI" "docs.localhost")"
 
 # Resolve nginx server names from explicit domain vars or from the final URLs.
-export API_DOMAIN="${API_DOMAIN:-$(url_host "$API_URI")}"
-export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-$(url_host "$DASHBOARD_URI")}"
-export LANDING_DOMAIN="${LANDING_DOMAIN:-$(url_host "$LANDING_URI")}"
-export WIKI_DOMAIN="${WIKI_DOMAIN:-$(url_host "$WIKI_URI")}"
-export API_DOMAIN="${API_DOMAIN:-api.localhost}"
-export DASHBOARD_DOMAIN="${DASHBOARD_DOMAIN:-app.localhost}"
-export LANDING_DOMAIN="${LANDING_DOMAIN:-www.localhost}"
-export WIKI_DOMAIN="${WIKI_DOMAIN:-docs.localhost}"
-
-if [ -n "$API_URI" ] && is_localhost_value "$API_DOMAIN" && ! is_localhost_value "$API_URI"; then
-    export API_DOMAIN="$(url_host "$API_URI")"
-fi
-if [ -n "$DASHBOARD_URI" ] && is_localhost_value "$DASHBOARD_DOMAIN" && ! is_localhost_value "$DASHBOARD_URI"; then
-    export DASHBOARD_DOMAIN="$(url_host "$DASHBOARD_URI")"
-fi
-if [ -n "$LANDING_URI" ] && is_localhost_value "$LANDING_DOMAIN" && ! is_localhost_value "$LANDING_URI"; then
-    export LANDING_DOMAIN="$(url_host "$LANDING_URI")"
-fi
-if [ -n "$WIKI_URI" ] && is_localhost_value "$WIKI_DOMAIN" && ! is_localhost_value "$WIKI_URI"; then
-    export WIKI_DOMAIN="$(url_host "$WIKI_URI")"
-fi
-
-# Local fallback URLs.
-export API_URI="${API_URI:-${PROTOCOL}://${API_DOMAIN}}"
-export DASHBOARD_URI="${DASHBOARD_URI:-${PROTOCOL}://${DASHBOARD_DOMAIN}}"
-export LANDING_URI="${LANDING_URI:-${PROTOCOL}://${LANDING_DOMAIN}}"
-export WIKI_URI="${WIKI_URI:-${PROTOCOL}://${WIKI_DOMAIN}}"
+export API_DOMAIN="$(resolve_domain "$API_DOMAIN" "$API_URI" "api.localhost")"
+export DASHBOARD_DOMAIN="$(resolve_domain "$DASHBOARD_DOMAIN" "$DASHBOARD_URI" "app.localhost")"
+export LANDING_DOMAIN="$(resolve_domain "$LANDING_DOMAIN" "$LANDING_URI" "www.localhost")"
+export WIKI_DOMAIN="$(resolve_domain "$WIKI_DOMAIN" "$WIKI_URI" "docs.localhost")"
 
 # SMTP is TCP, not a Coolify HTTP route. Set SMTP_DOMAIN explicitly when the
 # relay should use a different hostname than the inferred one.
